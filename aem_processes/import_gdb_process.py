@@ -74,6 +74,17 @@ class GeosoftGDBImporter:
                                    "filtered variant instead.",
                     "default": "dBdt_{polarization}"
                 },
+                "components": {
+                    "type": "string",
+                    "title": "Components (Optional)",
+                    "description": "Comma-separated receiver polarizations to import (e.g. 'Z' or "
+                                   "'Z,X'), matched against each GEX channel's "
+                                   "ReceiverPolarizationXYZ. Leave empty to import every channel. "
+                                   "For 1D inversion import only the vertical (Z) component; the "
+                                   "horizontal (X) response of a layered earth is ~0 and is not "
+                                   "1D-invertible.",
+                    "default": ""
+                },
                 "lines": {
                     "type": "string",
                     "title": "Lines (Optional)",
@@ -132,6 +143,7 @@ class GeosoftGDBImporter:
         projection = kwargs.get("projection")
         channel_template = kwargs.get("dbdt_channel_template") or "dBdt_{polarization}"
         lines_filter = [s.strip() for s in (kwargs.get("lines") or "").split(",") if s.strip()]
+        components = [c.strip().upper() for c in (kwargs.get("components") or "").split(",") if c.strip()]
 
         assert gdbfile is not None, "Missing GDB file"
         assert gexfile is not None, "Missing GEX file"
@@ -157,6 +169,13 @@ class GeosoftGDBImporter:
                 pol = str(gd[f"Channel{channel}"]["ReceiverPolarizationXYZ"]).strip().upper()
                 channel_polarization[channel] = pol
             print(f"GEX channels: {channel_polarization}, {len(gate_time_centers)} gates")
+
+            if components:
+                channel_polarization = {ch: pol for ch, pol in channel_polarization.items()
+                                        if pol in components}
+                assert channel_polarization, \
+                    f"No GEX channels match requested components {components}"
+                print(f"Filtered to components {components}: channels {channel_polarization}")
 
             print("Opening GDB database...")
             gdb = GDB(localized_files["gdbfile"])

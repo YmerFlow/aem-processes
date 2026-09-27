@@ -45,8 +45,11 @@ setup(
             "compound_filter=aem_processes.compound_filter:compound_filter",
         ],
         "simpeg.static_instrument": [
-            "Single moment TEM=SimPEG.electromagnetics.utils.static_instrument:SingleMomentTEMXYZSystem",
+            "Measured TEM=SimPEG.electromagnetics.utils.static_instrument:MeasuredTEMXYZSystem",
+            "Synthetic TEM=SimPEG.electromagnetics.utils.static_instrument:SyntheticTEMXYZSystem",
+            # Backwards-compatible aliases for existing saved inversion configs.
             "Dual moment TEM=SimPEG.electromagnetics.utils.static_instrument:DualMomentTEMXYZSystem",
+            "Single moment TEM=SimPEG.electromagnetics.utils.static_instrument:SyntheticTEMXYZSystem",
         ],
     },
 )
