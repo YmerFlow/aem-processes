@@ -29,7 +29,7 @@ setup(
     extras_require={
         'all': [
             "emeraldprocessing @ git+https://github.com/YmerFlow/emerald-processing-em.git",
-            "simpeg @ git+https://github.com/YmerFlow/simpeg.git@simpleem3",
+            "simpeg @ git+https://github.com/YmerFlow/simpeg.git@ymerflow-master",
             "emerald-monitor @ git+https://github.com/YmerFlow/emerald-monitor",
         ]
     },
