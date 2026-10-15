@@ -8,7 +8,7 @@ This is the first platform step of the migration in [Ymerflow#79](https://github
 
 ## Background: current state
 
-- **The library is complete and not installed.** `ymerflow-processing` on branch `remove-channel-renumbering` (59 commits ahead of `main`, none behind) registers about 45 steps in three entry-point groups, `ymerflow.processing.filters`, `ymerflow.processing.qc` and `ymerflow.processing.compare`, with a runner per group, a `StepReport` per step, a `RunReport` per run, three bundled pipelines (`standard-processing`, `acquisition-qc`, `synthetic-data`) and a CLI, `yf-process`. It registers no `ymerflow.process_types` entry point, so no environment shows anything from it.
+- **The library is complete and not installed.** `ymerflow-processing` `main` registers about 45 steps in three entry-point groups, `ymerflow.processing.filters`, `ymerflow.processing.qc` and `ymerflow.processing.compare`, with a runner per group, a `StepReport` per step, a `RunReport` per run, three bundled pipelines (`standard-processing`, `acquisition-qc`, `synthetic-data`) and a CLI, `yf-process`. It registers no `ymerflow.process_types` entry point, so no environment shows anything from it.
 - **The library reads files and never touches storage.** `ymerflow_processing.core.dataset.load(xyz_path, gex_path)` takes two local paths and returns a `Dataset` whose `survey` is a `libaarhusxyz.Survey`. The layering is deliberate: the platform materialises, the library reads.
 - **Process types live in pip-installed repos** since the runner extraction ([`docs/plans/done/extract-runner-sdk-and-process-repos.md`](https://github.com/YmerFlow/Ymerflow/blob/master/docs/plans/done/extract-runner-sdk-and-process-repos.md)): `aem-processes` (`import_skytem`, `process_tem`, `invert_tem`, `forward_tem`, ...), `mag-processes`, and `Ymerflow-process-sdk` (runner harness, `create_environment`).
 - **AEM datasets are written by `aem_processes.dataset_utils.write_dataset(xyz, gex, ...)`**: `root.msgpack` (XYZ with the GEX embedded), `root.xyz`, `root.gex`, `root.geojson`, `stats.json`, one part per flight line, and an `info.json` listing the files by MIME type.
@@ -60,15 +60,15 @@ Built with `create_environment` in the project that needs it, by whoever needs i
 
 The recipe follows the pattern the existing experiment environments use: launch `create_environment` from the Bootstrap environment, whose form is prefilled with the default image parameters (`BASE_RUNNER_PARAMS_JSON` in [`config.env.example`](https://github.com/YmerFlow/Ymerflow/blob/master/config.env.example): `python:3.11-slim-trixie`, the plugin SDK, the process SDK, plugin processes, `aem-processes[all]` and `mag-processes`, with the standard Dockerfile instructions and kaniko), and change only the package lines:
 
-- `aem-processes[all] @ git+https://github.com/YmerFlow/aem-processes.git@<branch>`: the branch carrying the two new process types. It starts from `measured-synthetic-tem` (one commit ahead of `master`: the Measured and Synthetic TEM systems registered, and the Geosoft importer's component filter), unless that commit is merged to `master` first.
-- `simpeg @ git+https://github.com/YmerFlow/simpeg.git@measured-synthetic-tem-fast-exact`: the single-moment, central-loop instrument with the exact fast-coefficient rescale.
+- `aem-processes[all] @ git+https://github.com/YmerFlow/aem-processes.git@<branch>`: the branch carrying the two new process types, started from `master`. `master` already registers the Measured and Synthetic TEM systems and pins `simpeg@ymerflow-master`.
+- `simpeg @ git+https://github.com/YmerFlow/simpeg.git@ymerflow-master`: the line the simpeg work was consolidated onto on 2026-10-14, carrying the N-moment Measured TEM system, the exact fast-coefficient rescale and the GEX receiver filters. It is what `aem-processes` `master` already pins, so this line is listed only to make the recipe explicit.
 - `ymerflow-processing @ git+https://github.com/YmerFlow/ymerflow-processing.git@main`.
 
 Builds install from the GitHub remotes, so a change reaches an environment only once it is pushed to a branch. Once validated, the same packages go into the default image.
 
 ## Implementation steps
 
-1. Merge `remove-channel-renumbering` into `ymerflow-processing` `main` by pull request.
+1. `ymerflow-processing` `main` carries the library as described above (the `remove-channel-renumbering` work is merged).
 2. Add the two process types in the chosen home, registered under `ymerflow.process_types`. Tests: `schema()` builds with the library installed and falls back without it; `run()` end to end on a synthetic dataset (the `synthetic-data` pipeline) against a local `file://` storage base, for both types, including an out-of-spec QC result completing normally.
 3. Build an environment with `create_environment` in a test project and confirm both process types appear with their forms. Write the tutorial below from this build, as it happens.
 4. Run the checks under Verification.
