@@ -31,6 +31,7 @@ setup(
             "emeraldprocessing @ git+https://github.com/YmerFlow/emerald-processing-em.git",
             "simpeg @ git+https://github.com/YmerFlow/simpeg.git@simpleem3",
             "emerald-monitor @ git+https://github.com/YmerFlow/emerald-monitor",
+            "ymerflow-processing @ git+https://github.com/YmerFlow/ymerflow-processing.git@main",
         ]
     },
     entry_points={
@@ -43,6 +44,8 @@ setup(
             "forward_tem=aem_processes.forward_process:Forward",
             "grid_tem=aem_processes.gridding_process:Gridding",
             "compound_filter=aem_processes.compound_filter:compound_filter",
+            "yf_process_tem=aem_processes.yf_processing_process:YFProcessTEM",
+            "yf_qc_tem=aem_processes.yf_processing_process:YFQCTEM",
         ],
         "simpeg.static_instrument": [
             "Measured TEM=SimPEG.electromagnetics.utils.static_instrument:MeasuredTEMXYZSystem",
