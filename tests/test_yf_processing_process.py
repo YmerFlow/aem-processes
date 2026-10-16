@@ -236,3 +236,49 @@ def test_a_step_that_raises_fails_the_run(imported, tmp_path):
         YFQCTEM.run(storage_context=storage(tmp_path, "qc"), input_data=imported,
                     steps=[{"altimeter_agreement": {"columns": ["nope", "nada"],
                                                     "good_max": 2.0, "marginal_max": 5.0}}])
+
+
+# ── Manual edits ─────────────────────────────────────────────────────────────
+
+def write_editor_diff(path, sounding, gate):
+    """What the plot editor saves: msgpack, only the touched gate, labelled by index."""
+    diff = XYZ({"flightlines": pd.DataFrame({"apply_idx": [float(sounding)]}),
+                "layer_data": {"InUse_Ch01": pd.DataFrame({gate: [0.0]})},
+                "model_info": {"diff_dummy": np.nan}, "file_meta": {}})
+    with open(path, "wb") as f:
+        diff.to_msgpack(f)
+    return f"file://{path}"
+
+
+def test_saved_edits_are_replayed_after_every_step(imported, tmp_path):
+    """Saving edits re-runs the process with "diff" set; the edit must survive it."""
+    from libaarhusxyz.export import msgpack as xyz_msgpack
+
+    diff = write_editor_diff(tmp_path / "inuse_diff_processed_data.msgpack", sounding=2, gate=3)
+    result = YFProcessTEM.run(storage_context=storage(tmp_path, "process"), input_data=imported,
+                              steps=[{"cull_negatives": {}}], diff=diff)
+    output_url = result["outputs"]["processed_data"]
+
+    output, _ = xyz_msgpack.load(output_url.split("file://", 1)[1], return_gex=True)
+    in_use = output.layer_data["InUse_Ch01"].values
+    assert in_use[2, 3] == 0
+    assert in_use.sum() == in_use.size - 1  # that gate and nothing else
+
+    last = report(output_url)["steps"][-1]
+    assert last["step"] == "apply_manual_edits"
+    assert last["params"]["diff"] == diff  # the edits' URL, not a temporary file
+    history = json.loads(output.model_info["processing_history"])
+    assert [entry["step"] for entry in history][-2:] == ["cull_negatives", "apply_manual_edits"]
+
+
+def test_only_processing_offers_edits():
+    assert "diff" in YFProcessTEM.schema()["properties"]
+    assert "diff" not in YFQCTEM.schema()["properties"]
+
+
+def test_qc_refuses_edits_rather_than_dropping_them(tmp_path):
+    with pytest.raises(ValueError, match="no in-use edits"):
+        YFQCTEM.run(storage_context=storage(tmp_path, "qc"),
+                    input_data=f"file://{tmp_path}/nowhere/root.msgpack",
+                    steps=[{"height_above_ground": {"good_max": 45, "marginal_max": 65}}],
+                    diff=f"file://{tmp_path}/nowhere/diff.msgpack")
