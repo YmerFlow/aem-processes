@@ -153,6 +153,28 @@ def _summarize(report, dataset):
     return {"worst_verdict": flight, "instrument": instrument, "ungraded": ungraded}
 
 
+#: What a saved edit is a difference from: this process's output before it.
+EDIT_CHECKPOINT = "output of the steps above"
+
+
+def _replay_edits(dataset, diff, registered, report, storage_kwargs):
+    """Apply in-use edits saved from a plot, after every step.
+
+    Last, so that no automated step can overwrite a person's decision. Run here
+    rather than appended to the pipeline so the report and the dataset's
+    processing history record the edits' URL, not a temporary file.
+    """
+    params = {"diff": diff, "checkpoint": EDIT_CHECKPOINT}
+    with localize_urls({"diff": diff}, storage_kwargs) as local:
+        dataset, step_report = registered["apply_manual_edits"](
+            dataset, local["diff"], checkpoint=EDIT_CHECKPOINT)
+    step_report.params = params
+    report.steps.append(step_report)
+    report.pipeline["steps"] = list(report.pipeline["steps"]) + [{"apply_manual_edits": params}]
+    dataset.record_step("apply_manual_edits", params)
+    return dataset
+
+
 class _PipelineProcess:
     """A ymerflow-processing pipeline run as a process type."""
 
@@ -161,30 +183,43 @@ class _PipelineProcess:
     runner = ""       # the library's runner class for it
     bundled = ""      # bundled pipeline the form opens with
     output_name = ""  # name of the output dataset
+    takes_edits = False  # whether in-use edits saved from a plot are replayed
     title = ""
     description = ""
 
     @classmethod
     def schema(cls):
+        properties = {
+            "input_data": {
+                "type": "string",
+                "format": "uri",
+                "x-format": "dataset",
+                "title": "Input Dataset",
+                "description": "An imported or previously processed AEM dataset",
+            },
+            "steps": steps_schema(cls.group, cls.bundled),
+            "label": {
+                "type": "string",
+                "title": "Run Label",
+                "description": "What to call this run in its report. Defaults to the input dataset's name.",
+            },
+        }
+        if cls.takes_edits:
+            # The name the plot editor uses: saving edits creates a new version
+            # of the process that made the dataset, with "diff" set to the edits.
+            properties["diff"] = {
+                "type": "string",
+                "format": "uri",
+                "title": "Manual Edits",
+                "description": "In-use edits saved from a plot of this process's output. Filled in "
+                               "by the plot editor when you save; replayed after every step, so "
+                               "re-running keeps them.",
+            }
         return {
             "type": "object",
             "title": cls.title,
             "description": cls.description,
-            "properties": {
-                "input_data": {
-                    "type": "string",
-                    "format": "uri",
-                    "x-format": "dataset",
-                    "title": "Input Dataset",
-                    "description": "An imported or previously processed AEM dataset",
-                },
-                "steps": steps_schema(cls.group, cls.bundled),
-                "label": {
-                    "type": "string",
-                    "title": "Run Label",
-                    "description": "What to call this run in its report. Defaults to the input dataset's name.",
-                },
-            },
+            "properties": properties,
             "required": ["input_data", "steps"],
         }
 
@@ -203,10 +238,14 @@ class _PipelineProcess:
         input_data = kwargs.get("input_data")
         steps = kwargs.get("steps") or []
         label = kwargs.get("label")
+        diff = kwargs.get("diff")
         if not input_data:
             raise ValueError("input_data is required")
         if not steps:
             raise ValueError("No steps given; a pipeline needs at least one")
+        if diff and not cls.takes_edits:
+            raise ValueError(f"{cls.title} changes no data, so it takes no in-use edits. "
+                             f"Save the edits on a processed dataset instead.")
 
         from ymerflow_processing.core import pipeline as yfp
         from ymerflow_processing.core.dataset import load
@@ -227,9 +266,10 @@ class _PipelineProcess:
             print(f"{report.identity}: {dataset.n_soundings} soundings, "
                   f"{len(pipeline.steps)} step(s) [{cls.kind}]")
             dataset, walked = runner.run(dataset)
-
-        report.steps = walked.steps
-        report.rollup = walked.rollup
+            report.steps = walked.steps
+            report.rollup = walked.rollup
+            if diff:
+                dataset = _replay_edits(dataset, diff, registered, report, storage_kwargs)
         summary = _summarize(report, dataset)
 
         # libaarhusxyz's text reader lowercases every name. Restore the spelling
@@ -265,6 +305,7 @@ class YFProcessTEM(_PipelineProcess):
     runner = "ProcessingRunner"
     bundled = "standard-processing"
     output_name = "processed_data"
+    takes_edits = True
     title = "Process TEM (ymerflow-processing)"
     description = ("Apply a ymerflow-processing pipeline to an AEM dataset: corrections, a noise "
                    "model, uncertainties, culling and averaging. Opens with the standard "
