@@ -8,7 +8,8 @@ import slugify
 from .stats import compute_xyz_stats, STATS_MIME
 
 
-def write_dataset(xyz, gex, dataset_name, process_id, process_version, storage_base, storage_kwargs):
+def write_dataset(xyz, gex, dataset_name, process_id, process_version, storage_base, storage_kwargs,
+                  extra_files=None):
     """Write a dataset to storage with all supported formats and flight line parts.
 
     Args:
@@ -19,6 +20,8 @@ def write_dataset(xyz, gex, dataset_name, process_id, process_version, storage_b
         process_version: Process version number (string or int)
         storage_base: Storage base URL
         storage_kwargs: fsspec storage arguments
+        extra_files: Optional {mime_type: (filename, text)} written beside the
+            dataset and listed in its info.json, e.g. a run report
 
     Returns:
         Dataset ID (UUID string)
@@ -81,6 +84,13 @@ def write_dataset(xyz, gex, dataset_name, process_id, process_version, storage_b
         "text/x-aarhusxyz-gex": root_gex_url,
         STATS_MIME: root_stats_url,
     }
+
+    for mime_type, (filename, text) in (extra_files or {}).items():
+        extra_url = f"{dataset_prefix}/{filename}"
+        print(f"Writing {filename} to: {extra_url}")
+        with fsspec.open(extra_url, 'w', **storage_kwargs) as f:
+            f.write(text)
+        files[mime_type] = extra_url
 
     # Write VTK and GLB if model has layer_data (resistivity models only)
     if hasattr(xyz, 'layer_data') and xyz.layer_data:
