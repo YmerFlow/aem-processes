@@ -36,13 +36,15 @@ def steps_schema(group, bundled):
     """The steps form: every step registered under ``group``, prefilled with ``bundled``.
 
     swaggerspect builds one form per step from the library's entry points, with
-    each parameter's type, default and ``:param:`` description. Steps are offered
-    in the order the bundled pipeline uses them, then the rest alphabetically.
-    Without the library installed the form is a bare list, so a package missing
-    from an environment shows up as a form rather than a failed build.
+    each parameter's type, default and description from the step's NumPy
+    docstring. Every step's first parameter is the dataset, which the process
+    supplies, so it is taken out of each form. Steps are offered in the order
+    the bundled pipeline uses them, then the rest alphabetically. Without the
+    library installed the form is a bare list, so a package missing from an
+    environment shows up as a form rather than a failed build.
     """
     try:
-        from ymerflow_processing.core.pipeline import Pipeline
+        from ymerflow_processing.pipeline import Pipeline
     except ImportError:
         print("ymerflow-processing is not installed; the steps form is a bare list")
         return {"type": "array", "title": "Steps",
@@ -52,6 +54,12 @@ def steps_schema(group, bundled):
     steps = swaggerspect.get_apis(group, multi=True)
     pipeline = Pipeline.load(bundled)
     by_name = {next(iter(api["properties"])): api for api in steps["items"]["anyOf"]}
+    for name, api in by_name.items():
+        arguments = api["properties"][name]
+        arguments.get("properties", {}).pop("dataset", None)
+        for listing in ("propertyOrder", "required"):
+            if "dataset" in arguments.get(listing, []):
+                arguments[listing] = [p for p in arguments[listing] if p != "dataset"]
     order = list(dict.fromkeys([name for name, _ in pipeline.steps if name in by_name]
                                + sorted(by_name)))
     steps["items"]["anyOf"] = [by_name[name] for name in order]
@@ -119,8 +127,8 @@ def _summarize(report, dataset):
     A finding is not a failure: an out-of-spec or ungraded result completes the
     process normally and is said here. Only a step that raises fails it.
     """
-    from ymerflow_processing.core.pipeline import MISSING
-    from ymerflow_processing.core.qc.thresholds import GOOD, worst_verdict
+    from ymerflow_processing.pipeline import MISSING
+    from ymerflow_processing.qc.thresholds import GOOD, worst_verdict
 
     for step in report.steps:
         counts = step.distributions.get("verdicts")
@@ -158,11 +166,13 @@ EDIT_CHECKPOINT = "output of the steps above"
 
 
 def _replay_edits(dataset, diff, registered, report, storage_kwargs):
-    """Apply in-use edits saved from a plot, after every step.
+    """Apply one save's in-use edits, after every step.
 
-    Last, so that no automated step can overwrite a person's decision. Run here
-    rather than appended to the pipeline so the report and the dataset's
-    processing history record the edits' URL, not a temporary file.
+    Last, so that no automated step can overwrite a person's decision; called
+    once per save, oldest first, so a later save overrides an earlier one where
+    both touched the same gate. Run here rather than appended to the pipeline so
+    the report and the dataset's processing history record the edits' URL, not
+    a temporary file.
     """
     params = {"diff": diff, "checkpoint": EDIT_CHECKPOINT}
     with localize_urls({"diff": diff}, storage_kwargs) as local:
@@ -206,14 +216,15 @@ class _PipelineProcess:
         }
         if cls.takes_edits:
             # The name the plot editor uses: saving edits creates a new version
-            # of the process that made the dataset, with "diff" set to the edits.
+            # of the process that made the dataset, with the new edits appended
+            # to "diff". Each entry holds one save's changes.
             properties["diff"] = {
-                "type": "string",
-                "format": "uri",
+                "type": "array",
+                "items": {"type": "string", "format": "uri"},
                 "title": "Manual Edits",
-                "description": "In-use edits saved from a plot of this process's output. Filled in "
-                               "by the plot editor when you save; replayed after every step, so "
-                               "re-running keeps them.",
+                "description": "In-use edits saved from plots of this process's output, one entry "
+                               "per save, oldest first. Filled in by the plot editor; replayed in "
+                               "order after every step, so re-running keeps every round.",
             }
         return {
             "type": "object",
@@ -238,17 +249,20 @@ class _PipelineProcess:
         input_data = kwargs.get("input_data")
         steps = kwargs.get("steps") or []
         label = kwargs.get("label")
-        diff = kwargs.get("diff")
+        # A list, oldest first; a single URL from a version saved before edits
+        # accumulated is one round.
+        diff = kwargs.get("diff") or []
+        diffs = [diff] if isinstance(diff, str) else list(diff)
         if not input_data:
             raise ValueError("input_data is required")
         if not steps:
             raise ValueError("No steps given; a pipeline needs at least one")
-        if diff and not cls.takes_edits:
+        if diffs and not cls.takes_edits:
             raise ValueError(f"{cls.title} changes no data, so it takes no in-use edits. "
                              f"Save the edits on a processed dataset instead.")
 
-        from ymerflow_processing.core import pipeline as yfp
-        from ymerflow_processing.core.dataset import load
+        from ymerflow_processing import pipeline as yfp
+        from ymerflow_processing.dataset import load
 
         # Checked before any data is fetched, so a misspelled step or a QC step
         # in a processing pipeline fails at once and says which registry it is in.
@@ -268,8 +282,8 @@ class _PipelineProcess:
             dataset, walked = runner.run(dataset)
             report.steps = walked.steps
             report.rollup = walked.rollup
-            if diff:
-                dataset = _replay_edits(dataset, diff, registered, report, storage_kwargs)
+            for url in diffs:
+                dataset = _replay_edits(dataset, url, registered, report, storage_kwargs)
         summary = _summarize(report, dataset)
 
         # libaarhusxyz's text reader lowercases every name. Restore the spelling

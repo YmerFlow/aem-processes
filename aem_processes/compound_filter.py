@@ -43,7 +43,8 @@ class compound_filter:
     Parameters
     ----------
     input   : storage URL of the input XYZ msgpack dataset (required)
-    diff    : storage URL of a JSON diff file produced by the frontend editor (optional)
+    diff    : storage URLs of the msgpack diffs saved by the plot editor, one per save,
+              oldest first (optional; a single URL is accepted too)
     output_name : name for the output dataset (default: "filtered")
     """
 
@@ -64,10 +65,11 @@ class compound_filter:
                     "description": "Input XYZ dataset to filter",
                 },
                 "diff": {
-                    "type": "string",
-                    "format": "uri",
-                    "title": "InUse Diff (optional)",
-                    "description": "libaarhusxyz msgpack diff produced by the InUse editor; leave blank for pass-through",
+                    "type": "array",
+                    "items": {"type": "string", "format": "uri"},
+                    "title": "InUse Diffs (optional)",
+                    "description": "libaarhusxyz msgpack diffs saved by the InUse editor, one per save, "
+                                   "applied oldest first; leave empty for pass-through",
                 },
                 "output_name": {
                     "type": "string",
@@ -90,7 +92,9 @@ class compound_filter:
         storage_kwargs = storage_context["storage_kwargs"]
 
         input_url = kwargs["input"]
-        diff_url = kwargs.get("diff") or None
+        # One entry per save, oldest first; a single URL from an older version is one save.
+        diff = kwargs.get("diff") or []
+        diff_urls = [diff] if isinstance(diff, str) else list(diff)
         output_name = kwargs.get("output_name", "filtered")
 
         print(f"compound_filter: loading input from {input_url}")
@@ -101,7 +105,7 @@ class compound_filter:
         xyz.normalize()
         print(f"Loaded {len(xyz.flightlines)} soundings")
 
-        if diff_url:
+        for diff_url in diff_urls:
             print(f"compound_filter: applying diff from {diff_url}")
             try:
                 with _localize(diff_url, storage_kwargs) as local_diff:
