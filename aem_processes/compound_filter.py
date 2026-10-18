@@ -1,7 +1,8 @@
-"""Compound filter process type.
+"""Apply In-Use Edits process type (registered as ``compound_filter``).
 
-Loads an input XYZ dataset, optionally applies a sparse InUse diff
-(libaarhusxyz msgpack format), and writes the result as a new dataset.
+Loads an input XYZ dataset, applies the in-use edits saved from a plot (sparse
+libaarhusxyz msgpack diffs, one per save), and writes the result as a new
+dataset.
 """
 
 import os
@@ -38,7 +39,10 @@ def _localize(url, storage_kwargs):
 
 
 class compound_filter:
-    """Apply a sparse InUse diff to an input XYZ dataset.
+    """Apply the in-use edits saved from a plot to an input XYZ dataset.
+
+    Registered under its original key, ``compound_filter``, so saved processes
+    keep working; it is shown as "Apply In-Use Edits".
 
     Parameters
     ----------
@@ -52,10 +56,10 @@ class compound_filter:
     def schema(cls):
         return {
             "type": "object",
-            "title": "Compound Filter",
-            "description": "Apply an InUse diff produced by the flag editor to an XYZ dataset, "
-                           "masking or unmasking soundings and gates. With no diff it passes the "
-                           "input through unchanged.",
+            "title": "Apply In-Use Edits",
+            "description": "Apply the in-use edits saved from a plot (gates and soundings turned "
+                           "off or back on) to a dataset, without processing it. With no edits it "
+                           "copies the input.",
             "properties": {
                 "input": {
                     "type": "string",
@@ -102,21 +106,26 @@ class compound_filter:
         with _localize(input_url, storage_kwargs) as local_input:
             xyz, gex = libaarhusxyz.export.msgpack.load(local_input, True)
 
-        xyz.normalize()
+        # The dataset's own naming (ALC for every importer), not libaarhusxyz's
+        # default: the plot editor writes its edits against InUse_Ch01, and the
+        # output has to stay in the names the editor can open again.
+        xyz.normalize(naming_standard=xyz.model_info.get("naming_standard") or "alc")
         print(f"Loaded {len(xyz.flightlines)} soundings")
 
         for diff_url in diff_urls:
             print(f"compound_filter: applying diff from {diff_url}")
-            try:
-                with _localize(diff_url, storage_kwargs) as local_diff:
-                    diff_xyz, _ = libaarhusxyz.export.msgpack.load(local_diff, True)
-                n_soundings = len(diff_xyz.flightlines)
-                n_channels = len(diff_xyz.layer_data)
-                print(f"Loaded diff: {n_soundings} sounding overrides across {n_channels} channel(s)")
-                xyz = xyz.apply_diff(diff_xyz)
-                print(f"Applied diff")
-            except Exception as e:
-                print(f"Warning: could not apply diff ({e}); continuing without it")
+            with _localize(diff_url, storage_kwargs) as local_diff:
+                diff_xyz, _ = libaarhusxyz.export.msgpack.load(local_diff, True)
+            # A dropped edit is the worst outcome, so a mismatch fails the run.
+            missing = sorted(set(diff_xyz.layer_data) - set(xyz.layer_data))
+            if missing:
+                raise KeyError(f"The edits in {diff_url} name {', '.join(missing)}, which this "
+                               f"dataset does not have (it has {', '.join(sorted(xyz.layer_data))}).")
+            n_soundings = len(diff_xyz.flightlines)
+            n_channels = len(diff_xyz.layer_data)
+            print(f"Loaded diff: {n_soundings} sounding overrides across {n_channels} channel(s)")
+            xyz = xyz.apply_diff(diff_xyz)
+            print(f"Applied diff")
 
         dataset_id = write_dataset(
             xyz, gex, output_name,

@@ -1,8 +1,8 @@
 # aem-processes
 
 AEM (Airborne Electromagnetic) process type implementations for YmerFlow: import, processing,
-inversion, forward modelling, gridding, and the `compound_filter` (XYZ / libaarhusxyz InUse-diff)
-process. Registered via the `ymerflow.process_types` setuptools entry-point group.
+inversion, forward modelling, gridding, and Apply In-Use Edits (`compound_filter`: the in-use edits
+saved from a plot, applied to a dataset). Registered via the `ymerflow.process_types` setuptools entry-point group.
 
 Installed via `pip install "aem-processes[all] @ git+https://github.com/YmerFlow/aem-processes.git"`.
 The `[all]` extra pulls the heavy inversion deps (emerald-processing-em, SimPEG@simpleem3,

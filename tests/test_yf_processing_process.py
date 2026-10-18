@@ -346,22 +346,23 @@ def run_compound_filter(imported, tmp_path, key):
             f"{result['dataset_id']}/root.msgpack")
 
 
-def test_compound_filter_applies_every_round_in_order(imported, tmp_path):
-    """The other process the plot editor re-runs gets the same list. Its diffs
-    are written here in its own (libaarhusxyz) naming: see the next test."""
-    url = run_compound_filter(imported, tmp_path, key="dbdt_inuse_ch1gt")
-    _, in_use = in_use_of(url, key="dbdt_inuse_ch1gt")
-    assert in_use[2, 3] == 1 and in_use[2, 5] == 0 and in_use[4, 6] == 0
-
-
-@pytest.mark.xfail(strict=True, raises=KeyError, reason=(
-    "compound_filter normalizes its input to libaarhusxyz naming before applying "
-    "the diff, so the editor's InUse_Ch01 matches nothing; the KeyError is caught "
-    "and printed as a warning and the edits are dropped. Predates the list change."))
-def test_compound_filter_applies_the_editors_own_diffs(imported, tmp_path):
+def test_apply_in_use_edits_applies_every_round_in_order(imported, tmp_path):
+    """The other process the plot editor re-runs ("Apply In-Use Edits",
+    compound_filter) gets the same list, in the editor's own names."""
     url = run_compound_filter(imported, tmp_path, key="InUse_Ch01")
     _, in_use = in_use_of(url)
     assert in_use[2, 3] == 1 and in_use[2, 5] == 0 and in_use[4, 6] == 0
+
+
+def test_apply_in_use_edits_fails_rather_than_drop_an_edit(imported, tmp_path):
+    """An edit naming an array the dataset does not have fails the run."""
+    with pytest.raises(KeyError, match="dbdt_inuse_ch1gt"):
+        run_compound_filter(imported, tmp_path, key="dbdt_inuse_ch1gt")
+
+
+def test_apply_in_use_edits_is_named_for_what_it_does():
+    from aem_processes.compound_filter import compound_filter
+    assert compound_filter.schema()["title"] == "Apply In-Use Edits"
 
 
 def test_only_processing_offers_edits():
