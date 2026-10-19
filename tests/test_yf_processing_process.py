@@ -127,16 +127,11 @@ def step_forms(process):
 SAMPLE = {"number": 1.5, "integer": 2, "string": "x", "boolean": True, "array": [], "object": {}}
 
 
-@pytest.mark.parametrize("process", [
-    pytest.param(YFProcessTEM, marks=pytest.mark.xfail(strict=True, reason=(
-        "swaggerspect adds the docstring's union type string as a top-level "
-        "\"type\": \"object\" beside the anyOf, so a scalar or per-channel field "
-        "rejects its own scalar. Fixed in swaggerspect, not worked around here."))),
-    YFQCTEM,
-])
+@pytest.mark.parametrize("process", [YFProcessTEM, YFQCTEM])
 def test_every_field_accepts_a_value_of_each_type_it_declares(process):
     """A field the platform's form cannot fill, or that rejects what it says it
-    takes, cannot be entered at all."""
+    takes, cannot be entered at all. The scalar-or-per-channel fields are the
+    ones at risk: swaggerspect adds an "object" type beside their anyOf."""
     import jsonschema
 
     refused = []

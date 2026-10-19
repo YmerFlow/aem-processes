@@ -60,6 +60,12 @@ def steps_schema(group, bundled):
         for listing in ("propertyOrder", "required"):
             if "dataset" in arguments.get(listing, []):
                 arguments[listing] = [p for p in arguments[listing] if p != "dataset"]
+        # A field offering a choice of types must not also demand one. swaggerspect
+        # adds the docstring's type text, which it reads as "object", beside the
+        # anyOf from the signature, and then no number validates.
+        for field in arguments.get("properties", {}).values():
+            if "anyOf" in field:
+                field.pop("type", None)
     order = list(dict.fromkeys([name for name, _ in pipeline.steps if name in by_name]
                                + sorted(by_name)))
     steps["items"]["anyOf"] = [by_name[name] for name in order]
