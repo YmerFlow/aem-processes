@@ -96,11 +96,13 @@ class MsgpackImporter:
             else:
                 print("Found embedded GEX/system data in msgpack")
 
-            # Delivered TEM data are normalized by receiver area and transmitter
-            # moment: V/(A m^4) once the scale factor is applied. Declared here so
-            # ymerflow-processing reads the convention from the file; a file that
-            # already declares one keeps it.
-            xyz.model_info.setdefault("normalization", "rx_tx")
+            # A ymerflow msgpack container is assumed to already be in the SimPEG
+            # static_instrument convention (dbdt per unit transmitter moment,
+            # receiver geometry carried by the GEX GateFactor, with its own
+            # scalefactor), so nothing is converted — it is passed through as-is.
+            # Strip any stale `normalization` field an older container carries so
+            # no dead ymerflow convention metadata survives.
+            xyz.model_info.pop("normalization", None)
 
             # Write dataset
             print("Writing imported dataset...")

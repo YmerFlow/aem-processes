@@ -50,9 +50,6 @@ setup(
         "simpeg.static_instrument": [
             "Measured TEM=SimPEG.electromagnetics.utils.static_instrument:MeasuredTEMXYZSystem",
             "Synthetic TEM=SimPEG.electromagnetics.utils.static_instrument:SyntheticTEMXYZSystem",
-            # Backwards-compatible aliases for existing saved inversion configs.
-            "Dual moment TEM=SimPEG.electromagnetics.utils.static_instrument:DualMomentTEMXYZSystem",
-            "Single moment TEM=SimPEG.electromagnetics.utils.static_instrument:SyntheticTEMXYZSystem",
         ],
     },
 )

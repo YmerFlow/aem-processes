@@ -8,6 +8,65 @@ from .utils import localize_urls, normalize_column_case
 from .dataset_utils import write_dataset
 
 
+def conform_to_simpeg_convention(xyz, gex, channels, tx_normalized,
+                                 rx_normalized, scalefactor):
+    """Reconcile an uploaded delivery to the SimPEG static_instrument format.
+
+    The SimPEG format the whole inversion stack reads is: ``dbdt_chNgt`` per unit
+    transmitter moment (tx divided out of the arrays), with receiver geometry NOT
+    in the arrays — the GEX ``GateFactor`` and the model_info ``scalefactor`` are
+    applied at read, never baked in. The upload may already be tx-normalized
+    (SkyTEM / Aarhus deliveries are) and/or rx-normalized; each axis is declared
+    by its own boolean and reconciled independently here.
+
+    Transmitter axis
+        If ``tx_normalized`` is false the arrays still carry the transmitter
+        moment, so each channel's ``dbdt`` is divided by its nominal
+        ``ApproxDipoleMoment`` (``nturns x TxLoopArea x TxApproximateCurrent``).
+        A channel whose moment the GEX does not give is a hard error: the
+        convention cannot be produced. The relative ``dbdt_std`` fraction is a
+        ratio and so is left alone.
+
+    Receiver axis
+        If ``rx_normalized`` is true the receiver geometry is already in the
+        arrays, so the channel's GEX ``GateFactor`` is set to ``1.0`` to stop
+        SimPEG applying it a second time at read. Otherwise the delivered
+        ``GateFactor`` is kept.
+
+    After reconciling, assert ``mean(-dbdt x scalefactor x GateFactor) < 1e-3``
+    per channel, mirroring SimPEG's ``base.py`` validation. With no convention
+    field left to cross-check against, this plausibility check is the only
+    automatic guard, and SimPEG would reject the same data at inversion anyway —
+    so it is a hard error that blocks the import, raised here where the GEX is
+    present and the inputs are still fixable.
+    """
+    for channel in channels:
+        block = gex.gex_dict.setdefault("Channel%d" % channel, {})
+        data_name = xyz.layer_data_data_name(channel)
+
+        if not tx_normalized:
+            moment = block.get("ApproxDipoleMoment")
+            if not moment:
+                raise ValueError(
+                    "Channel %d: the GEX gives no ApproxDipoleMoment, so the "
+                    "transmitter moment cannot be divided out to produce the "
+                    "SimPEG per-unit-moment convention." % channel)
+            xyz.layer_data[data_name] = xyz.layer_data[data_name] / float(moment)
+
+        if rx_normalized:
+            block["GateFactor"] = 1.0
+
+        gate_factor = block.get("GateFactor", 1.0) or 1.0
+        dbdt = -xyz.layer_data[data_name].values.flatten() * scalefactor * gate_factor
+        mean = np.nanmean(dbdt)
+        assert mean < 1e-3, (
+            "Channel %d: mean(-dbdt x scalefactor x GateFactor) = %g is not "
+            "< 1e-3, so the data is not in V/m^2 after read-time scaling. The "
+            "scalefactor, or the tx_normalized / rx_normalized declaration, is "
+            "probably wrong — SimPEG would reject this data at inversion."
+            % (channel, mean))
+
+
 class LibaarhusXYZImporter:
     """Import SkyTEM data from XYZ/GEX files (Aarhus Workbench format)."""
 
@@ -54,6 +113,23 @@ class LibaarhusXYZImporter:
                     "description": "Data unit: 1 = volt, 1e-12 = picovolt",
                     "default": 1e-12
                 },
+                "tx_normalized": {
+                    "type": "boolean",
+                    "title": "Transmitter-moment normalized",
+                    "description": "The uploaded dB/dt is already divided by the transmitter moment "
+                                   "(per unit dipole moment). True for SkyTEM / Aarhus Workbench deliveries. "
+                                   "If false, the importer divides each channel by its nominal dipole moment.",
+                    "default": True
+                },
+                "rx_normalized": {
+                    "type": "boolean",
+                    "title": "Receiver-geometry normalized",
+                    "description": "The uploaded dB/dt already has receiver coil area x turns applied (V/m^2). "
+                                   "Usually false for SkyTEM deliveries, which carry receiver geometry as the "
+                                   "GEX GateFactor applied at read. If true, the importer sets GateFactor = 1 so "
+                                   "it is not applied twice.",
+                    "default": False
+                },
                 "projection": {
                     "type": "integer",
                     "title": "EPSG Projection Code",
@@ -92,6 +168,8 @@ class LibaarhusXYZImporter:
         gexfile = kwargs.get("gexfile")
         alcfile = kwargs.get("alcfile")
         scalefactor = kwargs.get("scalefactor", 1e-12)
+        tx_normalized = kwargs.get("tx_normalized", True)
+        rx_normalized = kwargs.get("rx_normalized", False)
         projection = kwargs.get("projection")
 
         # Validate required parameters
@@ -153,14 +231,23 @@ class LibaarhusXYZImporter:
             assert "projection" in xyz.model_info
             assert "scalefactor" in xyz.model_info
 
-            # Delivered TEM data are normalized by receiver area and transmitter
-            # moment: V/(A m^4) once the scale factor is applied. Declared here so
-            # ymerflow-processing reads the convention from the file; a file that
-            # already declares one keeps it.
-            xyz.model_info.setdefault("normalization", "rx_tx")
-
             # Load GEX (system description)
             gex = libaarhusxyz.GEX(localized_files["gexfile"])
+
+            # Land the data in exactly the SimPEG static_instrument convention:
+            # dbdt per unit transmitter moment (tx divided out of the arrays),
+            # receiver geometry NOT in the arrays but carried by the GEX
+            # GateFactor and applied at read, scalefactor converting raw -> V/m^2
+            # also at read. The upload varies on two independent axes, declared by
+            # tx_normalized / rx_normalized; here we reconcile each to the target.
+            # There is no ymerflow `normalization` field any more — the data
+            # simply IS the SimPEG convention, and scalefactor + GateFactor stay
+            # metadata, never baked into the arrays. See
+            # simpeg/.../static_instrument/data_format.md.
+            conform_to_simpeg_convention(
+                xyz, gex, sorted(channels_with_data),
+                tx_normalized=tx_normalized, rx_normalized=rx_normalized,
+                scalefactor=float(scalefactor))
 
             # Write dataset
             print("Writing imported dataset...")
