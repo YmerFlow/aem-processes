@@ -1,4 +1,4 @@
-"""Apply In-Use Edits process type (registered as ``compound_filter``).
+"""Apply Manual Edits process type.
 
 Loads an input XYZ dataset, applies the in-use edits saved from a plot (sparse
 libaarhusxyz msgpack diffs, one per save), and writes the result as a new
@@ -38,11 +38,8 @@ def _localize(url, storage_kwargs):
             pass
 
 
-class compound_filter:
+class ApplyManualEdits:
     """Apply the in-use edits saved from a plot to an input XYZ dataset.
-
-    Registered under its original key, ``compound_filter``, so saved processes
-    keep working; it is shown as "Apply In-Use Edits".
 
     Parameters
     ----------
@@ -56,7 +53,7 @@ class compound_filter:
     def schema(cls):
         return {
             "type": "object",
-            "title": "Apply In-Use Edits",
+            "title": "Apply Manual Edits",
             "description": "Apply the in-use edits saved from a plot (gates and soundings turned "
                            "off or back on) to a dataset, without processing it. With no edits it "
                            "copies the input.",
@@ -101,7 +98,7 @@ class compound_filter:
         diff_urls = [diff] if isinstance(diff, str) else list(diff)
         output_name = kwargs.get("output_name", "filtered")
 
-        print(f"compound_filter: loading input from {input_url}")
+        print(f"apply_manual_edits: loading input from {input_url}")
 
         with _localize(input_url, storage_kwargs) as local_input:
             xyz, gex = libaarhusxyz.export.msgpack.load(local_input, True)
@@ -113,7 +110,7 @@ class compound_filter:
         print(f"Loaded {len(xyz.flightlines)} soundings")
 
         for diff_url in diff_urls:
-            print(f"compound_filter: applying diff from {diff_url}")
+            print(f"apply_manual_edits: applying diff from {diff_url}")
             with _localize(diff_url, storage_kwargs) as local_diff:
                 diff_xyz, _ = libaarhusxyz.export.msgpack.load(local_diff, True)
             # A dropped edit is the worst outcome, so a mismatch fails the run.
@@ -132,5 +129,5 @@ class compound_filter:
             process_id, process_version,
             storage_base, storage_kwargs,
         )
-        print(f"compound_filter: output dataset ID = {dataset_id}")
+        print(f"apply_manual_edits: output dataset ID = {dataset_id}")
         return {"status": "success", "output_name": output_name, "dataset_id": dataset_id}

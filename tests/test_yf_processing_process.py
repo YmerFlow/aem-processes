@@ -330,34 +330,34 @@ def test_every_round_of_edits_is_replayed_in_order(imported, tmp_path):
     assert [entry["params"].get("diff") for entry in history if entry["step"] == "apply_manual_edits"] == [first, second]
 
 
-def run_compound_filter(imported, tmp_path, key):
-    from aem_processes.compound_filter import compound_filter
+def run_apply_manual_edits(imported, tmp_path, key):
+    from aem_processes.apply_manual_edits import ApplyManualEdits
 
     first = write_editor_diff(tmp_path / "round1.msgpack", {(2, 3): 0, (2, 5): 0}, key=key)
     second = write_editor_diff(tmp_path / "round2.msgpack", {(2, 3): 1, (4, 6): 0}, key=key)
     context = storage(tmp_path, "filter")
-    result = compound_filter.run(storage_context=context, input=imported, diff=[first, second])
+    result = ApplyManualEdits.run(storage_context=context, input=imported, diff=[first, second])
     return (f"{context['storage_base']}/processes/filter/0/datasets/"
             f"{result['dataset_id']}/root.msgpack")
 
 
-def test_apply_in_use_edits_applies_every_round_in_order(imported, tmp_path):
-    """The other process the plot editor re-runs ("Apply In-Use Edits",
-    compound_filter) gets the same list, in the editor's own names."""
-    url = run_compound_filter(imported, tmp_path, key="InUse_Ch01")
+def test_apply_manual_edits_applies_every_round_in_order(imported, tmp_path):
+    """The other process the plot editor re-runs gets the same list, in the
+    editor's own names."""
+    url = run_apply_manual_edits(imported, tmp_path, key="InUse_Ch01")
     _, in_use = in_use_of(url)
     assert in_use[2, 3] == 1 and in_use[2, 5] == 0 and in_use[4, 6] == 0
 
 
-def test_apply_in_use_edits_fails_rather_than_drop_an_edit(imported, tmp_path):
+def test_apply_manual_edits_fails_rather_than_drop_an_edit(imported, tmp_path):
     """An edit naming an array the dataset does not have fails the run."""
     with pytest.raises(KeyError, match="dbdt_inuse_ch1gt"):
-        run_compound_filter(imported, tmp_path, key="dbdt_inuse_ch1gt")
+        run_apply_manual_edits(imported, tmp_path, key="dbdt_inuse_ch1gt")
 
 
-def test_apply_in_use_edits_is_named_for_what_it_does():
-    from aem_processes.compound_filter import compound_filter
-    assert compound_filter.schema()["title"] == "Apply In-Use Edits"
+def test_apply_manual_edits_is_named_for_what_it_does():
+    from aem_processes.apply_manual_edits import ApplyManualEdits
+    assert ApplyManualEdits.schema()["title"] == "Apply Manual Edits"
 
 
 def test_only_processing_offers_edits():

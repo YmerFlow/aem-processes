@@ -43,7 +43,7 @@ setup(
             "invert_tem=aem_processes.inversion_process:Inversion",
             "forward_tem=aem_processes.forward_process:Forward",
             "grid_tem=aem_processes.gridding_process:Gridding",
-            "compound_filter=aem_processes.compound_filter:compound_filter",
+            "apply_manual_edits=aem_processes.apply_manual_edits:ApplyManualEdits",
             "yf_process_tem=aem_processes.yf_processing_process:YFProcessTEM",
             "yf_qc_tem=aem_processes.yf_processing_process:YFQCTEM",
         ],
