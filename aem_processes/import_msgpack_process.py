@@ -96,6 +96,12 @@ class MsgpackImporter:
             else:
                 print("Found embedded GEX/system data in msgpack")
 
+            # Delivered TEM data are normalized by receiver area and transmitter
+            # moment: V/(A m^4) once the scale factor is applied. Declared here so
+            # ymerflow-processing reads the convention from the file; a file that
+            # already declares one keeps it.
+            xyz.model_info.setdefault("normalization", "rx_tx")
+
             # Write dataset
             print("Writing imported dataset...")
             dataset_id = write_dataset(
