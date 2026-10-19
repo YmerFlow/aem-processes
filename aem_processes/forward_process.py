@@ -7,8 +7,8 @@ import libaarhusxyz.export.msgpack
 import numpy as np
 import pandas as pd
 import swaggerspect
-import SimPEG
-import SimPEG.directives
+import simpeg
+import simpeg.directives
 from .utils import get_entry_points, load_system, localize_urls, normalize_column_case
 from .dataset_utils import write_dataset
 import swaggerspect.validate

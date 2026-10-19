@@ -2,13 +2,13 @@
 
 import json
 import numpy as np
-import SimPEG.directives
+import simpeg.directives
 
 # Tag prefixed to log lines carrying structured numeric data for progress plots.
 STATUS_TAG = "##STATUS##"
 
 
-class ReportingDirective(SimPEG.directives.InversionDirective):
+class ReportingDirective(simpeg.directives.InversionDirective):
     """Directive to log inversion progress."""
 
     def __init__(self):
@@ -47,7 +47,7 @@ class ReportingDirective(SimPEG.directives.InversionDirective):
         self.log({"step": int(self.opt.iter + 2), "status": "end"})
 
 
-class SaveOutputEveryIteration(SimPEG.directives.InversionDirective):
+class SaveOutputEveryIteration(simpeg.directives.InversionDirective):
     """Directive to save intermediate models."""
 
     def __init__(self, system, iteration_datasets):

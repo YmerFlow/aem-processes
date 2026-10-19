@@ -48,8 +48,8 @@ setup(
             "yf_qc_tem=aem_processes.yf_processing_process:YFQCTEM",
         ],
         "simpeg.static_instrument": [
-            "Measured TEM=SimPEG.electromagnetics.utils.static_instrument:MeasuredTEMXYZSystem",
-            "Synthetic TEM=SimPEG.electromagnetics.utils.static_instrument:SyntheticTEMXYZSystem",
+            "Measured TEM=simpeg.electromagnetics.utils.static_instrument:MeasuredTEMXYZSystem",
+            "Synthetic TEM=simpeg.electromagnetics.utils.static_instrument:SyntheticTEMXYZSystem",
         ],
     },
 )
