@@ -8,18 +8,18 @@ from .utils import localize_urls, normalize_column_case
 from .dataset_utils import write_dataset
 
 
-def conform_to_simpeg_convention(xyz, gex, channels, tx_normalized,
-                                 rx_normalized, scalefactor):
+def conform_to_simpeg_convention(xyz, gex, channels, tx_normalized, scalefactor):
     """Reconcile an uploaded delivery to the SimPEG static_instrument format.
 
     The SimPEG format the whole inversion stack reads is: ``dbdt_chNgt`` per unit
-    transmitter moment (tx divided out of the arrays), with receiver geometry NOT
-    in the arrays — the GEX ``GateFactor`` and the model_info ``scalefactor`` are
-    applied at read, never baked in. The upload may already be tx-normalized
-    (SkyTEM / Aarhus deliveries are) and/or rx-normalized; each axis is declared
-    by its own boolean and reconciled independently here.
+    transmitter moment (tx divided out of the arrays), with the receiver area
+    already in the delivered data. The model_info ``scalefactor`` and the GEX
+    calibration (``GateFactor``, the amplitude factor, and ``GateTimeShift``, the
+    time shift) are applied at read, never baked in. The upload may or may not
+    be tx-normalized (SkyTEM / Aarhus deliveries are), declared by
+    ``tx_normalized``.
 
-    Transmitter axis
+    Transmitter moment
         If ``tx_normalized`` is false the arrays still carry the transmitter
         moment, so each channel's ``dbdt`` is divided by its nominal
         ``ApproxDipoleMoment`` (``nturns x TxLoopArea x TxApproximateCurrent``).
@@ -27,11 +27,10 @@ def conform_to_simpeg_convention(xyz, gex, channels, tx_normalized,
         convention cannot be produced. The relative ``dbdt_std`` fraction is a
         ratio and so is left alone.
 
-    Receiver axis
-        If ``rx_normalized`` is true the receiver geometry is already in the
-        arrays, so the channel's GEX ``GateFactor`` is set to ``1.0`` to stop
-        SimPEG applying it a second time at read. Otherwise the delivered
-        ``GateFactor`` is kept.
+    Calibration
+        ``GateFactor`` is read as the GEX gives it and never written: it is the
+        system's calibration amplitude factor, which SimPEG multiplies in at
+        read. Resetting it would discard the calibration.
 
     After reconciling, assert ``mean(-dbdt x scalefactor x GateFactor) < 1e-3``
     per channel, mirroring SimPEG's ``base.py`` validation. With no convention
@@ -41,7 +40,7 @@ def conform_to_simpeg_convention(xyz, gex, channels, tx_normalized,
     present and the inputs are still fixable.
     """
     for channel in channels:
-        block = gex.gex_dict.setdefault("Channel%d" % channel, {})
+        block = gex.gex_dict.get("Channel%d" % channel, {})
         data_name = xyz.layer_data_data_name(channel)
 
         if not tx_normalized:
@@ -53,18 +52,30 @@ def conform_to_simpeg_convention(xyz, gex, channels, tx_normalized,
                     "SimPEG per-unit-moment convention." % channel)
             xyz.layer_data[data_name] = xyz.layer_data[data_name] / float(moment)
 
-        if rx_normalized:
-            block["GateFactor"] = 1.0
-
         gate_factor = block.get("GateFactor", 1.0) or 1.0
         dbdt = -xyz.layer_data[data_name].values.flatten() * scalefactor * gate_factor
         mean = np.nanmean(dbdt)
         assert mean < 1e-3, (
             "Channel %d: mean(-dbdt x scalefactor x GateFactor) = %g is not "
             "< 1e-3, so the data is not in V/m^2 after read-time scaling. The "
-            "scalefactor, or the tx_normalized / rx_normalized declaration, is "
-            "probably wrong — SimPEG would reject this data at inversion."
+            "scalefactor, or the tx_normalized declaration, is probably wrong — "
+            "SimPEG would reject this data at inversion."
             % (channel, mean))
+
+
+def refuse_rx_normalized(kwargs):
+    """Fail a run that still asks for the removed ``rx_normalized`` reset.
+
+    It set ``GateFactor`` to 1, which discards the calibration. A version
+    saved with it on would otherwise import differently from what was asked,
+    without saying so.
+    """
+    if kwargs.get("rx_normalized"):
+        raise ValueError(
+            "rx_normalized is no longer supported: GateFactor is the GEX "
+            "calibration amplitude factor, not receiver geometry, so the importer "
+            "keeps it as delivered. The receiver area is already in the data. "
+            "Run the import again without rx_normalized.")
 
 
 class LibaarhusXYZImporter:
@@ -121,15 +132,6 @@ class LibaarhusXYZImporter:
                                    "If false, the importer divides each channel by its nominal dipole moment.",
                     "default": True
                 },
-                "rx_normalized": {
-                    "type": "boolean",
-                    "title": "Receiver-geometry normalized",
-                    "description": "The uploaded dB/dt already has receiver coil area x turns applied (V/m^2). "
-                                   "Usually false for SkyTEM deliveries, which carry receiver geometry as the "
-                                   "GEX GateFactor applied at read. If true, the importer sets GateFactor = 1 so "
-                                   "it is not applied twice.",
-                    "default": False
-                },
                 "projection": {
                     "type": "integer",
                     "title": "EPSG Projection Code",
@@ -169,8 +171,8 @@ class LibaarhusXYZImporter:
         alcfile = kwargs.get("alcfile")
         scalefactor = kwargs.get("scalefactor", 1e-12)
         tx_normalized = kwargs.get("tx_normalized", True)
-        rx_normalized = kwargs.get("rx_normalized", False)
         projection = kwargs.get("projection")
+        refuse_rx_normalized(kwargs)
 
         # Validate required parameters
         assert xyzfile is not None, "Missing xyz file"
@@ -235,19 +237,16 @@ class LibaarhusXYZImporter:
             gex = libaarhusxyz.GEX(localized_files["gexfile"])
 
             # Land the data in exactly the SimPEG static_instrument convention:
-            # dbdt per unit transmitter moment (tx divided out of the arrays),
-            # receiver geometry NOT in the arrays but carried by the GEX
-            # GateFactor and applied at read, scalefactor converting raw -> V/m^2
-            # also at read. The upload varies on two independent axes, declared by
-            # tx_normalized / rx_normalized; here we reconcile each to the target.
-            # There is no ymerflow `normalization` field any more — the data
-            # simply IS the SimPEG convention, and scalefactor + GateFactor stay
-            # metadata, never baked into the arrays. See
-            # simpeg/.../static_instrument/data_format.md.
+            # dbdt per unit transmitter moment (tx divided out of the arrays,
+            # declared by tx_normalized), receiver area already in the delivered
+            # data, scalefactor converting raw -> V/m^2 at read, and the GEX
+            # calibration (GateFactor, GateTimeShift) applied at read as
+            # delivered. There is no ymerflow `normalization` field any more —
+            # the data simply IS the SimPEG convention, and scalefactor +
+            # GateFactor stay metadata, never baked into the arrays.
             conform_to_simpeg_convention(
                 xyz, gex, sorted(channels_with_data),
-                tx_normalized=tx_normalized, rx_normalized=rx_normalized,
-                scalefactor=float(scalefactor))
+                tx_normalized=tx_normalized, scalefactor=float(scalefactor))
 
             # Write dataset
             print("Writing imported dataset...")

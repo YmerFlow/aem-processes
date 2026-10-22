@@ -1,32 +1,50 @@
-"""Both importers land data in the SimPEG static_instrument convention.
+"""The importers land data in the SimPEG static_instrument convention.
 
 The convention is: dbdt per unit transmitter moment (tx divided out of the
-arrays), receiver geometry NOT in the arrays but carried by the GEX GateFactor,
-and a model_info scalefactor — both applied at read, never baked in. There is no
-ymerflow `normalization` field any more; the data simply IS this format. See
-simpeg/.../static_instrument/data_format.md.
+arrays), the receiver area already in the delivered data, a model_info
+scalefactor, and the GEX calibration (GateFactor, the amplitude factor) — both
+applied at read, never baked in. There is no ymerflow `normalization` field any
+more; the data simply IS this format.
 """
+
+import sys
+import types
 
 import numpy as np
 import pytest
+from libaarhusxyz import GEX
 from libaarhusxyz.export import msgpack as xyz_msgpack
 
+from aem_processes.import_gdb_process import GeosoftGDBImporter
 from aem_processes.import_msgpack_process import MsgpackImporter
 from aem_processes.import_process import LibaarhusXYZImporter
-from test_yf_processing_process import dataset_dir, storage, write_delivery
+from test_yf_processing_process import N_GATES, dataset_dir, storage, write_delivery
 
 # turns (1.0) x TxLoopArea (342.0) x TxApproximateCurrent (9.0) for the LM.
 LM_MOMENT = 1.0 * 342.0 * 9.0
 
+#: A calibration amplitude factor, as a calibrated GEX carries it.
+CALIBRATION = 0.97
+
+
+def calibrate(gex_path, factor=CALIBRATION):
+    """Give the delivery's GEX a calibration amplitude factor."""
+    gex = GEX(str(gex_path))
+    gex.gex_dict["Channel1"]["GateFactor"] = factor
+    with open(gex_path, "wb") as f:
+        gex.dump(f)
+
 
 def run_import(tmp_path, label="import", scalefactor=1.0, tx_normalized=True,
-               rx_normalized=False, moments=(("LM", 9.0),)):
+               moments=(("LM", 9.0),), gate_factor=None, **extra):
     xyz_path, gex_path = write_delivery(tmp_path, moments)
+    if gate_factor is not None:
+        calibrate(gex_path, gate_factor)
     result = LibaarhusXYZImporter.run(
         storage_context=storage(tmp_path, label),
         xyzfile=f"file://{xyz_path}", gexfile=f"file://{gex_path}",
         scalefactor=scalefactor, tx_normalized=tx_normalized,
-        rx_normalized=rx_normalized, projection=32613)
+        projection=32613, **extra)
     return result["outputs"]["imported_data"]
 
 
@@ -42,6 +60,10 @@ def loaded(url):
 def channel_values(dataset):
     channel = dataset.channels[0]
     return dataset.layer_data[channel.data_key].to_numpy(dtype=float)
+
+
+def gate_factor(dataset):
+    return dataset.survey.gex.gex_dict["Channel1"].get("GateFactor")
 
 
 # ── The XYZ/GEX importer ─────────────────────────────────────────────────────
@@ -79,15 +101,88 @@ def test_a_channel_without_a_moment_cannot_be_tx_normalized(tmp_path):
             scalefactor=1.0, tx_normalized=False, projection=32613)
 
 
-def test_a_receiver_normalized_delivery_sets_gatefactor_to_one(tmp_path):
-    """Receiver geometry already in the arrays would be applied twice at read,
-    so the importer sets GateFactor = 1 to make the read-time multiply a no-op.
-    The arrays themselves are untouched on the receiver axis."""
-    base = channel_values(loaded(run_import(tmp_path, label="rx_false", rx_normalized=False)))
-    dataset = loaded(run_import(tmp_path, label="rx_true", rx_normalized=True))
+def test_the_calibration_gatefactor_is_kept_as_delivered(tmp_path):
+    """GateFactor is the calibration amplitude factor SimPEG multiplies in at
+    read, so the import keeps it and leaves the arrays as delivered."""
+    uncalibrated = channel_values(loaded(run_import(tmp_path, label="uncalibrated")))
+    dataset = loaded(run_import(tmp_path, label="calibrated", gate_factor=CALIBRATION))
 
-    assert dataset.survey.gex.gex_dict["Channel1"]["GateFactor"] == 1.0
-    assert np.allclose(channel_values(dataset), base)
+    assert gate_factor(dataset) == CALIBRATION
+    assert np.allclose(channel_values(dataset), uncalibrated)
+
+
+def test_the_removed_receiver_reset_is_refused(tmp_path):
+    """rx_normalized reset GateFactor to 1, discarding the calibration. A saved
+    version still asking for it fails rather than import differently."""
+    with pytest.raises(ValueError, match="rx_normalized"):
+        run_import(tmp_path, gate_factor=CALIBRATION, rx_normalized=True)
+
+
+# ── The GDB importer ─────────────────────────────────────────────────────────
+
+GDB_LINE = 100101
+GDB_SOUNDINGS = 30
+
+
+def fake_pygdb(channels):
+    """A stand-in for the pygdb reader, serving one line of in-memory channels.
+
+    It has the three members the importer reads; pygdb is installed per
+    environment and is not needed to test the import itself.
+    """
+    class GDB:
+        line_names = [f"L{GDB_LINE}"]
+
+        def __init__(self, path):
+            pass
+
+        def channels_on_line(self, line):
+            return list(channels)
+
+        def read(self, line, name):
+            return channels[name]
+
+    return types.SimpleNamespace(GDB=GDB)
+
+
+def run_gdb_import(tmp_path, monkeypatch, label="gdb", tx_normalized=True,
+                   gate_factor=None):
+    _, gex_path = write_delivery(tmp_path, (("LM", 9.0),))
+    if gate_factor is not None:
+        calibrate(gex_path, gate_factor)
+    times = GEX(str(gex_path)).gex_dict["General"]["GateTime"][:N_GATES, 0]
+    n = GDB_SOUNDINGS
+    channels = {
+        "Line": np.full(n, GDB_LINE), "Easting": 500000.0 + 25.0 * np.arange(n),
+        "Northing": np.full(n, 4500000.0), "Ground_Elevation": np.full(n, 1900.0),
+        "Tx_Loop_Clearance": np.full(n, 35.0),
+        "dBdt_Z": np.tile(1e-6 * (times / 1e-5) ** -1.5, (n, 1)),
+    }
+    monkeypatch.setitem(sys.modules, "pygdb", fake_pygdb(channels))
+    gdb_path = tmp_path / "survey.gdb"
+    gdb_path.write_bytes(b"")
+    result = GeosoftGDBImporter.run(
+        storage_context=storage(tmp_path, label),
+        gdbfile=f"file://{gdb_path}", gexfile=f"file://{gex_path}",
+        scalefactor=1.0, tx_normalized=tx_normalized, projection=32613)
+    return result["outputs"]["imported_data"], channels["dBdt_Z"]
+
+
+def test_gdb_import_produces_the_simpeg_convention(tmp_path, monkeypatch):
+    """The GDB path conforms as the XYZ path does: no normalization field, the
+    calibration GateFactor kept, the arrays as delivered."""
+    url, delivered = run_gdb_import(tmp_path, monkeypatch, gate_factor=CALIBRATION)
+    dataset = loaded(url)
+
+    assert "normalization" not in dataset.survey.xyz.model_info
+    assert gate_factor(dataset) == CALIBRATION
+    assert np.allclose(channel_values(dataset), delivered)
+
+
+def test_a_gdb_that_is_not_tx_normalized_is_divided_by_the_moment(tmp_path, monkeypatch):
+    url, delivered = run_gdb_import(tmp_path, monkeypatch, tx_normalized=False)
+
+    assert np.allclose(channel_values(loaded(url)), delivered / LM_MOMENT)
 
 
 # ── The msgpack importer ─────────────────────────────────────────────────────
