@@ -179,7 +179,7 @@ def test_processing_writes_the_dataset_and_its_report(imported, tmp_path):
     files = info(output)["files"]
     assert {"text/x-aarhusxyz", "text/x-aarhusxyz-gex", REPORT_MIME} <= set(files)
     names = [step["step"] for step in report(output)["steps"]]
-    assert names[-3:] == ["estimate_noise_model", "assign_uncertainty", "perturb_from_uncertainty"]
+    assert names[-3:] == ["set_noise_floor", "assign_uncertainty", "add_noise"]
 
 
 def test_the_process_type_adds_nothing_to_the_library(imported, tmp_path):

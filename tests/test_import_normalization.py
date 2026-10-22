@@ -1,10 +1,11 @@
 """The importers land data in the SimPEG static_instrument convention.
 
 The convention is: dbdt per unit transmitter moment (tx divided out of the
-arrays), the receiver area already in the delivered data, a model_info
-scalefactor, and the GEX calibration (GateFactor, the amplitude factor) — both
-applied at read, never baked in. There is no ymerflow `normalization` field any
-more; the data simply IS this format.
+arrays), the receiver area already divided out in the delivered data (recorded
+as model_info rx_normalized), a model_info scalefactor, and the GEX calibration
+(GateFactor, the amplitude factor) — both applied at read, never baked in.
+There is no ymerflow `normalization` field any more; the data simply IS this
+format.
 """
 
 import sys
@@ -101,21 +102,41 @@ def test_a_channel_without_a_moment_cannot_be_tx_normalized(tmp_path):
             scalefactor=1.0, tx_normalized=False, projection=32613)
 
 
-def test_the_calibration_gatefactor_is_kept_as_delivered(tmp_path):
+def test_receiver_normalization_leaves_the_calibration_gatefactor_alone(tmp_path):
     """GateFactor is the calibration amplitude factor SimPEG multiplies in at
-    read, so the import keeps it and leaves the arrays as delivered."""
+    read. Receiver normalization is a unit division, independent of it, so an
+    rx_normalized import keeps the GateFactor and the arrays as delivered."""
     uncalibrated = channel_values(loaded(run_import(tmp_path, label="uncalibrated")))
-    dataset = loaded(run_import(tmp_path, label="calibrated", gate_factor=CALIBRATION))
+    dataset = loaded(run_import(tmp_path, label="calibrated", gate_factor=CALIBRATION,
+                                rx_normalized=True))
 
     assert gate_factor(dataset) == CALIBRATION
     assert np.allclose(channel_values(dataset), uncalibrated)
 
 
-def test_the_removed_receiver_reset_is_refused(tmp_path):
-    """rx_normalized reset GateFactor to 1, discarding the calibration. A saved
-    version still asking for it fails rather than import differently."""
-    with pytest.raises(ValueError, match="rx_normalized"):
-        run_import(tmp_path, gate_factor=CALIBRATION, rx_normalized=True)
+def test_a_delivery_that_is_not_rx_normalized_is_refused(tmp_path):
+    """Nothing in the chain divides by receiver area yet, so such data cannot
+    be brought into the convention."""
+    with pytest.raises(ValueError, match="receiver area"):
+        run_import(tmp_path, rx_normalized=False)
+
+
+def test_the_receiver_normalization_is_recorded_in_every_form(tmp_path):
+    """Recorded as the string "true", which reads back the same from the stored
+    msgpack, the stored text form, and a processed dataset written from that
+    text form. A boolean would come back as the string "True" from text."""
+    from aem_processes.yf_processing_process import YFProcessTEM
+
+    imported = run_import(tmp_path)  # rx_normalized absent: the default, true
+    stored, _ = xyz_msgpack.load(imported.split("file://", 1)[1], return_gex=True)
+    processed = YFProcessTEM.run(storage_context=storage(tmp_path, "process"),
+                                 input_data=imported, steps=[{"cull_negatives": {}}])
+    after, _ = xyz_msgpack.load(
+        processed["outputs"]["processed_data"].split("file://", 1)[1], return_gex=True)
+
+    assert stored.model_info["rx_normalized"] == "true"
+    assert loaded(imported).survey.xyz.model_info["rx_normalized"] == "true"
+    assert after.model_info["rx_normalized"] == "true"
 
 
 # ── The GDB importer ─────────────────────────────────────────────────────────
@@ -170,11 +191,13 @@ def run_gdb_import(tmp_path, monkeypatch, label="gdb", tx_normalized=True,
 
 def test_gdb_import_produces_the_simpeg_convention(tmp_path, monkeypatch):
     """The GDB path conforms as the XYZ path does: no normalization field, the
-    calibration GateFactor kept, the arrays as delivered."""
+    receiver normalization recorded, the calibration GateFactor kept, the
+    arrays as delivered."""
     url, delivered = run_gdb_import(tmp_path, monkeypatch, gate_factor=CALIBRATION)
     dataset = loaded(url)
 
     assert "normalization" not in dataset.survey.xyz.model_info
+    assert dataset.survey.xyz.model_info["rx_normalized"] == "true"
     assert gate_factor(dataset) == CALIBRATION
     assert np.allclose(channel_values(dataset), delivered)
 

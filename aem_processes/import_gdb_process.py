@@ -108,6 +108,15 @@ class GeosoftGDBImporter:
                                    "channel by its nominal dipole moment from the GEX.",
                     "default": True
                 },
+                "rx_normalized": {
+                    "type": "boolean",
+                    "title": "Receiver-area normalized",
+                    "description": "The stored dB/dt already has the receiver area x turns divided out. "
+                                   "Recorded in the dataset's metadata; it changes neither the data nor "
+                                   "the GEX GateFactor, which is the calibration factor. False is refused: "
+                                   "nothing in the processing chain divides by receiver area yet.",
+                    "default": True
+                },
                 "projection": {
                     "type": "integer",
                     "title": "EPSG Projection Code",
@@ -150,6 +159,7 @@ class GeosoftGDBImporter:
         gexfile = kwargs.get("gexfile")
         scalefactor = kwargs.get("scalefactor", 1e-12)
         tx_normalized = kwargs.get("tx_normalized", True)
+        rx_normalized = kwargs.get("rx_normalized", True)
         projection = kwargs.get("projection")
         channel_template = kwargs.get("dbdt_channel_template") or "dBdt_{polarization}"
         lines_filter = [s.strip() for s in (kwargs.get("lines") or "").split(",") if s.strip()]
@@ -233,13 +243,15 @@ class GeosoftGDBImporter:
             assert "scalefactor" in xyz.model_info
 
             # Land the data in the SimPEG static_instrument convention, as the
-            # XYZ/GEX importer does: per unit transmitter moment, the GEX
-            # calibration applied at read as delivered.
+            # XYZ/GEX importer does: per unit transmitter moment, the receiver
+            # normalization recorded, the GEX calibration applied at read as
+            # delivered.
             channels = sorted(ch for ch in channel_polarization
                               if f"Gate_Ch{ch:02d}" in xyz.layer_data)
             conform_to_simpeg_convention(
                 xyz, gex, channels,
-                tx_normalized=tx_normalized, scalefactor=float(scalefactor))
+                tx_normalized=tx_normalized, rx_normalized=rx_normalized,
+                scalefactor=float(scalefactor))
 
             print("Writing imported dataset...")
             dataset_id = write_dataset(
