@@ -98,8 +98,8 @@ class MsgpackImporter:
 
             # A ymerflow msgpack container is assumed to already be in the SimPEG
             # static_instrument convention (dbdt per unit transmitter moment,
-            # receiver geometry carried by the GEX GateFactor, with its own
-            # scalefactor), so nothing is converted — it is passed through as-is.
+            # the GEX calibration GateFactor and its own scalefactor applied at
+            # read), so nothing is converted — it is passed through as-is.
             # Strip any stale `normalization` field an older container carries so
             # no dead ymerflow convention metadata survives.
             xyz.model_info.pop("normalization", None)

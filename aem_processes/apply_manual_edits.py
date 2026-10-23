@@ -85,6 +85,7 @@ class ApplyManualEdits:
     @classmethod
     def run(cls, storage_context=None, **kwargs):
         import libaarhusxyz
+        import libaarhusxyz.export.msgpack
         import numpy as np
 
         process_id = storage_context["process_id"]

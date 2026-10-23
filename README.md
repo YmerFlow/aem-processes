@@ -1,7 +1,7 @@
 # aem-processes
 
 AEM (Airborne Electromagnetic) process type implementations for YmerFlow: import, processing,
-inversion, forward modelling, gridding, and Apply Manual Edits (`apply_manual_edits`: the in-use edits
+inversion, forward modeling, gridding, and Apply Manual Edits (`apply_manual_edits`: the in-use edits
 saved from a plot, applied to a dataset). Registered via the `ymerflow.process_types` setuptools entry-point group.
 
 Installed via `pip install "aem-processes[all] @ git+https://github.com/YmerFlow/aem-processes.git"`.
@@ -13,27 +13,13 @@ emerald-monitor). `pyinterp` compiles against Boost ≥ 1.79 — build with a C+
 
 ## Amplitude convention on import
 
-Both importers produce exactly the **SimPEG `static_instrument` convention**:
-`dbdt_chNgt` per unit transmitter moment (tx divided out of the arrays), receiver
-geometry carried by the GEX `GateFactor` and the unit scaling by `scalefactor`
-(`model_info`), both applied **at read and never baked into the arrays**. There
-is no `normalization` metadata field — the data simply *is* this format. The
-canonical spec is `simpeg/.../static_instrument/data_format.md`.
+Every importer produces exactly the **SimPEG `static_instrument` convention**: `dbdt_chNgt` per unit transmitter moment (tx divided out of the arrays), with the receiver area already divided out in the delivered data. The unit scaling `scalefactor` (`model_info`) and the GEX calibration are applied **at read and never baked into the arrays**: `GateFactor` is the calibration amplitude factor, which SimPEG multiplies in, and `GateTimeShift` the calibration time shift, which libaarhusxyz adds to the gate times. An importer never changes either. There is no `normalization` metadata field — the data simply *is* this format. The canonical spec is `simpeg/.../static_instrument/data_format.md`.
 
-- **XYZ/GEX importer** takes two booleans describing how the upload was
-  normalized, defaulting to the SkyTEM / Aarhus Workbench delivery state:
-  - `tx_normalized` (default `true`) — the dB/dt is already divided by the
-    transmitter moment. If `false`, the importer divides each channel by its
-    nominal `ApproxDipoleMoment` (a channel without one is a hard error).
-  - `rx_normalized` (default `false`) — receiver geometry is already in the
-    arrays. If `true`, the importer sets that channel's `GateFactor = 1` so the
-    read-time multiply is a no-op; the arrays are otherwise untouched.
-  After reconciling, the importer asserts
-  `mean(-dbdt × scalefactor × GateFactor) < 1e-3` per channel (mirroring SimPEG's
-  own validation) as a hard error, since there is no convention field left to
-  cross-check against.
-- **msgpack importer** assumes the container is already in this convention and
-  converts nothing; it only strips any stale `normalization` field an older
-  container carries.
+- **XYZ/GEX and GDB importers** take two booleans describing the delivery, both defaulting to the SkyTEM / Aarhus Workbench delivery state:
+  - `tx_normalized` (default `true`): the dB/dt is already divided by the transmitter moment. If `false`, the importer divides each channel by its nominal `ApproxDipoleMoment` (a channel without one is a hard error).
+  - `rx_normalized` (default `true`): the dB/dt already has the receiver area × turns divided out. It is recorded, not acted on: stored as `model_info["rx_normalized"] = "true"`, a string because the XYZ text form reads a boolean back as `"True"`. Receiver normalization is a unit division, independent of calibration, so it never touches `GateFactor`. `false` is refused with an error, because nothing in the processing chain divides by receiver area yet.
+
+  After reconciling, the importer asserts `mean(-dbdt × scalefactor × GateFactor) < 1e-3` per channel (mirroring SimPEG's own validation) as a hard error, since there is no convention field left to cross-check against.
+- **msgpack importer** assumes the container is already in this convention and converts nothing; it only strips any stale `normalization` field an older container carries.
 
 Tests: `python -m pytest tests` (needs ymerflow-processing installed).

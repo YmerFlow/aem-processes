@@ -6,6 +6,8 @@ input is exactly what a real platform dataset looks like.
 """
 
 import json
+import os
+import subprocess
 import sys
 
 import numpy as np
@@ -179,7 +181,7 @@ def test_processing_writes_the_dataset_and_its_report(imported, tmp_path):
     files = info(output)["files"]
     assert {"text/x-aarhusxyz", "text/x-aarhusxyz-gex", REPORT_MIME} <= set(files)
     names = [step["step"] for step in report(output)["steps"]]
-    assert names[-3:] == ["estimate_noise_model", "assign_uncertainty", "perturb_from_uncertainty"]
+    assert names[-3:] == ["set_noise_floor", "assign_uncertainty", "add_noise"]
 
 
 def test_the_process_type_adds_nothing_to_the_library(imported, tmp_path):
@@ -353,6 +355,21 @@ def test_apply_manual_edits_fails_rather_than_drop_an_edit(imported, tmp_path):
     """An edit naming an array the dataset does not have fails the run."""
     with pytest.raises(KeyError, match="dbdt_inuse_ch1gt"):
         run_apply_manual_edits(imported, tmp_path, key="dbdt_inuse_ch1gt")
+
+
+def test_apply_manual_edits_runs_in_a_fresh_interpreter(imported, tmp_path):
+    """A job imports only its own process type, so the module must import what
+    it uses itself rather than rely on another module having loaded it first."""
+    diff = write_editor_diff(tmp_path / "round1.msgpack", {(2, 3): 0})
+    script = ("import json, sys\n"
+              "from aem_processes.apply_manual_edits import ApplyManualEdits\n"
+              "context, input_url, diff = json.loads(sys.argv[1])\n"
+              "ApplyManualEdits.run(storage_context=context, input=input_url, diff=[diff])\n")
+    arguments = json.dumps([storage(tmp_path, "filter"), imported, diff])
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(p for p in sys.path if p))
+    done = subprocess.run([sys.executable, "-c", script, arguments],
+                          env=env, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr[-2000:]
 
 
 def test_apply_manual_edits_is_named_for_what_it_does():

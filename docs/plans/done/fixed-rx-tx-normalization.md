@@ -1,6 +1,6 @@
 # Fixed Normalization Convention: Conform to SimPEG static_instrument, Drop the Ceremony
 
-**Status:** Draft — not yet implemented
+**Status:** Implemented. Corrected 2026-10-22 by `gatefactor-is-calibration.md`: `GateFactor` is the calibration amplitude factor, not receiver geometry, and the receiver area is already divided out in the delivered data; `rx_normalized` is kept as recorded metadata and never touches `GateFactor`. The text below is corrected to match.
 **Repos touched:** `deps/aem-processes` (importers), `deps/ymerflow-processing` (dataset + filters). `deps/simpeg/simpeg/electromagnetics/utils/static_instrument` is the **definitive, read-only authority** — its assumptions are not changed; everything else conforms to it. `deps/emerald-processing-em` is a dependency but **not on the live inversion path** (see below).
 **Context:** The `import-declares-normalization` change (aem-processes) plus ymerflow-processing's `declare_normalization`/`convert_normalization` steps and the three-valued `Dataset.normalization` turned the amplitude convention into mutable metadata declared and converted by pipeline steps. In practice it is ceremony: the convert step is commented out of the standard pipeline, the declare step only re-asserts what import wrote, and — critically — the one engine that actually inverts the data (`simpeg.static_instrument`) ignores the field entirely and has its own fixed, documented convention. This plan deletes the ceremony and makes the on-disk convention exactly what SimPEG static_instrument reads.
 
@@ -12,7 +12,7 @@ SimPEG static_instrument is the authority and **is not being changed**. Its on-d
 
 1. **`dbdt_chNgt` — measured dBz/dt, already normalized *per unit transmitter moment*** (the transmitter moment is divided out), in **raw instrument units** (e.g. nV/m², not SI). This is what a SkyTEM/Aarhus delivery already contains. The forward proves the assumption: the SimPEG source carries **unit dipole moment** (`current = 1/area`) *because the data are dB/dt normalised per unit transmitter moment* (`dual.py:344-352`).
 2. **`scalefactor` (model_info)** — dimensionless multiplier, raw → **V/m² (= T/s)**, the SI unit SimPEG's receiver expects. Applied **at read**: `dbdt × scalefactor` (`base.py:308`, `dual.py:251`). Validation: `mean(-dbdt × scalefactor) < 1e-3` (`base.py:309`). **Not baked into the data.**
-3. **`GateFactor` (GEX, per channel)** — receiver-geometry normalization, applied **at read** in the dual-moment path: `-dbdt × scalefactor × GateFactor × tiltcorrection` (`dual.py:251`). **Not baked into the data.**
+3. **`GateFactor` (GEX, per channel)** — the calibration amplitude factor, applied **at read**: `-dbdt × scalefactor × GateFactor × tiltcorrection` (`dual.py:251`). **Not baked into the data.** Its companion `GateTimeShift` is the calibration time shift, added to the gate times by libaarhusxyz (`GEX.gate_times`).
 4. **Transmitter moment is *not* applied to the data at read.** The real `ApproxDipoleMoment` (= `nturns × TxLoopArea × TxApproximateCurrent`, nominal) is used **only** for the noise floor (below). The data stays per-unit-moment.
 5. **`dbdt_std_chNgt` — dimensionless relative fraction** of the data, not an absolute standard deviation (`dual.py:253`, `data_format.md`).
 
@@ -28,10 +28,11 @@ N_i(t) = (noise_level_1ms / dipole_moment_i) · (t · 1000)^noise_exponent      
 
 ### What this means for "data on disk is normalized by transmitter AND receiver moment"
 
-Half right, and the half that is wrong matters:
+Right, with two factors that stay out of the arrays:
 
 - **Transmitter moment — yes, in the data.** Divided out on disk, by convention, as SkyTEM delivers it. This is the real fixed invariant.
-- **Receiver geometry — no, NOT in the data.** It is `GateFactor`, applied at read from the GEX.
+- **Receiver area — yes, in the data.** The delivered dB/dt is already normalized by it.
+- **Calibration — no, NOT in the data.** It is `GateFactor` (amplitude) and `GateTimeShift` (time), applied at read from the GEX.
 - **Unit scaling — no, NOT in the data.** It is `scalefactor`, applied at read from model_info.
 
 So **`scalefactor` and `GateFactor` are load-bearing metadata and must survive on disk** — "ditch all metadata" cannot mean them. What we ditch is the *ymerflow-processing normalization field and its declare/convert steps*, which are a separate, redundant layer the definitive engine never reads.
@@ -44,9 +45,9 @@ The platform's inversion and forward load systems from the `simpeg.static_instru
 
 ## Change 1 — XYZ/GEX importer converts any normalization to the SimPEG format (`aem-processes/aem_processes/import_process.py`)
 
-The importer's job is to land data in exactly the SimPEG format regardless of how the upload was normalized. **The SimPEG format is: `dbdt_chNgt` per unit transmitter moment (tx divided out) with receiver geometry *not* applied to the arrays — `scalefactor` (model_info) converts raw → V/m² and `GateFactor` (GEX) applies receiver geometry, both at read; `dbdt_std_chNgt` a dimensionless fraction.**
+The importer's job is to land data in exactly the SimPEG format regardless of how the upload was normalized. **The SimPEG format is: `dbdt_chNgt` per unit transmitter moment (tx divided out), with the receiver area already divided out in the delivered data — `scalefactor` (model_info) converts raw → V/m² and `GateFactor` (GEX) applies the calibration amplitude factor, both at read; `dbdt_std_chNgt` a dimensionless fraction.**
 
-The uploaded data varies along **two independent axes** — is the transmitter moment already divided out, and is the receiver geometry already applied — so the user declares each with its own boolean (checkbox), rather than one four-valued field. The defaults reflect a SkyTEM / Aarhus delivery, which is the current setup: tx divided out, receiver geometry not yet applied.
+The user declares two things about the upload, each with its own boolean (checkbox): is the transmitter moment already divided out, which the importer reconciles, and is the receiver area × turns already divided out, which it records. The defaults reflect a SkyTEM / Aarhus delivery, which is the current setup: both divided out.
 
 ```python
 "tx_normalized": {
@@ -59,33 +60,26 @@ The uploaded data varies along **two independent axes** — is the transmitter m
 },
 "rx_normalized": {
     "type": "boolean",
-    "title": "Receiver-geometry normalized",
-    "description": "The uploaded dB/dt already has receiver coil area × turns applied (V/m²). "
-                   "Usually false for SkyTEM deliveries, which carry receiver geometry as the "
-                   "GEX GateFactor applied at read. If true, the importer sets GateFactor = 1 so "
-                   "it is not applied twice.",
-    "default": false
+    "title": "Receiver-area normalized",
+    "description": "The uploaded dB/dt already has the receiver area x turns divided out. "
+                   "True for SkyTEM / Aarhus Workbench deliveries. Recorded in the dataset's "
+                   "metadata; it changes neither the data nor the GEX GateFactor, which is the "
+                   "calibration factor. False is refused: nothing in the processing chain "
+                   "divides by receiver area yet.",
+    "default": true
 }
 ```
 
-The two booleans map to the **two independent import actions**, derived from the SimPEG target (tx **in** the arrays, rx **not** in the arrays):
-
-| `tx_normalized` | `rx_normalized` | Delivery this describes | Transmitter action | Receiver action |
-|---|---|---|---|---|
-| **true** (default) | **false** (default) | SkyTEM / Aarhus | none | none — keep GEX `GateFactor`, applied at read |
-| false | false | raw instrument dump | divide arrays by nominal `ApproxDipoleMoment` | none — keep GEX `GateFactor` |
-| false | true | receiver-normalized "V/m²" export | divide arrays by nominal `ApproxDipoleMoment` | set GEX `GateFactor = 1` so read-time multiply is a no-op |
-| true | true | fully normalized | none | set GEX `GateFactor = 1` |
-
 - **Transmitter action** — when tx is not yet divided out, divide each channel's `dbdt_chNgt` by its nominal `ApproxDipoleMoment` (`nturns × TxLoopArea × TxApproximateCurrent`). Fail loudly if a channel's moment is absent from the GEX — the convention cannot be produced.
-- **Receiver action** — when rx is already in the arrays, set that channel's GEX `GateFactor` to `1.0`; otherwise leave the delivered `GateFactor` so SimPEG applies receiver geometry at read. This is the only reconciliation on the receiver axis, since the arrays themselves never carry receiver normalization in the SimPEG format.
+- **Receiver normalization** — recorded, not acted on: `model_info["rx_normalized"] = "true"` (a string, because the XYZ text form reads a boolean back as `"True"`). It is a unit division, independent of calibration, so it never reads, writes or resets `GateFactor`. `false` is refused, because nothing in the chain divides by receiver area yet.
+- **Calibration** — the delivered `GateFactor` and `GateTimeShift` are kept as the GEX gives them; SimPEG applies the factor and libaarhusxyz the shift at read. The importer never writes either.
 - **`scalefactor`** stays a model_info value and a separate parameter (raw → V/m²); it is never multiplied into the arrays. After a correct import, `mean(-dbdt × scalefactor × GateFactor)` must satisfy SimPEG's `< 1e-3` validation — **add an import-time assertion mirroring `base.py:309` as a hard error that blocks the import** (decided, open decision #3), since there is no longer a convention field to cross-check against. A hard error, not a warning: it is the only remaining automatic guard, and SimPEG would reject the same data at inversion anyway — failing at import is where the GEX is present and the inputs are still fixable.
 - **Remove `xyz.model_info.setdefault("normalization", "rx_tx")`** (`import_process.py:160`). The ymerflow convention field is gone; `scalefactor` and `GateFactor` remain.
-- **Target engine:** measured data is read by `MeasuredTEMXYZSystem`, which applies `× scalefactor × GateFactor` for **any number of moments, 1…N** (`dual.py:251`) and reads a GEX. There is no separate single-moment path that skips `GateFactor` — the `base.py:308` line is only the base class's validation `assert`, not a data read. So the `GateFactor = 1` reconciliation above is valid for every measured import. `SyntheticTEMXYZSystem` has no GEX and behaves as `GateFactor = 1` throughout; it is not an import target but see Change 3 for how the noise step must tolerate a missing GEX.
+- **Target engine:** measured data is read by `MeasuredTEMXYZSystem`, which applies `× scalefactor × GateFactor` for **any number of moments, 1…N** (`dual.py:251`) and reads a GEX. There is no separate single-moment path that skips `GateFactor` — the `base.py:308` line is only the base class's validation `assert`, not a data read. So the calibration applies to every measured import. `SyntheticTEMXYZSystem` has no GEX and behaves as `GateFactor = 1` throughout; it is not an import target but see Change 3 for how the noise step must tolerate a missing GEX.
 
 ## Change 2 — msgpack importer assumes SimPEG format (`aem-processes/aem_processes/import_msgpack_process.py`)
 
-**None of Change 1 applies to the msgpack importer.** A ymerflow msgpack container is assumed to be **already in the SimPEG convention** (per unit transmitter moment, receiver geometry carried by `GateFactor`, with its own `scalefactor`). There are **no `tx_normalized`/`rx_normalized` parameters and no amplitude conversion** — the container is passed through as-is. Strip any stale `model_info["normalization"]` an older container carries so no dead field survives.
+**None of Change 1 applies to the msgpack importer.** A ymerflow msgpack container is assumed to be **already in the SimPEG convention** (per unit transmitter moment, the calibration carried by `GateFactor`, with its own `scalefactor`). There is **no `tx_normalized` parameter and no amplitude conversion** — the container is passed through as-is. Strip any stale `model_info["normalization"]` an older container carries so no dead field survives.
 
 ## Change 3 — Remove the ceremony from ymerflow-processing (`deps/ymerflow-processing`)
 
@@ -107,8 +101,8 @@ ymerflow-processing is the pre-inversion processing library; it must read amplit
 
 The convention must be written down where each audience meets it, with **one canonical source and references to it** rather than four drifting copies.
 
-- **Canonical spec:** `deps/simpeg/simpeg/electromagnetics/utils/static_instrument/data_format.md` is already the authority and stays so. Extend it only if a gap is found (e.g. make the "receiver geometry is `GateFactor`, applied at read, not in the arrays" and "data are per unit transmitter moment" statements explicit and prominent, since the whole stack hinges on them). Every other doc links here instead of restating the physics.
-- **`deps/aem-processes/README.md`** (and any import section): document that both importers produce the SimPEG convention; that the XYZ/GEX importer takes two booleans `tx_normalized` (default true) and `rx_normalized` (default false), the SkyTEM delivery state, and how they map to the tx-division / `GateFactor=1` actions; and that the msgpack importer assumes the convention and converts nothing. State plainly that `scalefactor` and `GateFactor` are metadata applied at read and must never be baked into the arrays.
+- **Canonical spec:** `deps/simpeg/simpeg/electromagnetics/utils/static_instrument/data_format.md` is already the authority and stays so. Extend it only if a gap is found (e.g. make the "`GateFactor` is the calibration amplitude factor, applied at read, not in the arrays" and "data are per unit transmitter moment" statements explicit and prominent, since the whole stack hinges on them). Every other doc links here instead of restating the physics.
+- **`deps/aem-processes/README.md`** (and any import section): document that both importers produce the SimPEG convention; that the XYZ/GEX importer takes the booleans `tx_normalized` and `rx_normalized` (both default true, the SkyTEM delivery state), that the first maps to the tx division and the second is recorded metadata; and that the msgpack importer assumes the convention and converts nothing. State plainly that `scalefactor` and `GateFactor` are metadata applied at read and must never be baked into the arrays.
 - **`deps/ymerflow-processing/docs/reference/filters.md`** and **`docs/reference/llms.txt`**: remove `declare_normalization` and `convert_normalization`; state that the library holds data in the SimPEG convention between steps and that the noise-floor step alone materializes physical units transiently. Update `filters/normalize.py`'s own module docstring the same way (it currently teaches the three-convention model at length).
 - **`deps/ymerflow-processing/README.md`** and the `building_plans/01` filter inventory (filter_08 "where unit confusion concentrates"): note that the convention is now fixed by the SimPEG format upstream, so the declare/convert steps are retired; keep the historical rationale but mark it superseded rather than deleting the reasoning.
 - **`Nagelfluh/docs/architecture/pipelines.md`** (and a short note in `docs/architecture/processes.md` or `storage.md`): describe the data-on-disk convention once, for platform readers, linking to the canonical `data_format.md`. This is where someone adding a new importer or process will look first.
@@ -130,8 +124,8 @@ The convention must be written down where each audience meets it, with **one can
 
 ## Open decisions for discussion
 
-1. ~~**`input_normalization` enum names / default**~~ — **decided:** two boolean parameters, `tx_normalized` (default true) and `rx_normalized` (default false), the SkyTEM delivery state. See Change 1.
+1. ~~**`input_normalization` enum names / default**~~ — **decided:** two boolean parameters, `tx_normalized` and `rx_normalized` (both default true), the SkyTEM delivery state. See Change 1. (`rx_normalized` first set `GateFactor = 1`; since 2026-10-22 it is recorded metadata only, because that reset discarded the calibration.)
 2. ~~**Amplitude basis in ymerflow-processing**~~ — **decided:** internal format = on-disk format (raw, per-unit-moment); the noise-floor step transforms to physical units transiently and discards them. See Change 3.
 3. ~~Whether to add the plausibility assertion to import~~ — **decided: yes, add `mean(-dbdt × scalefactor × GateFactor) < 1e-3` (mirroring `base.py:309`) as a hard error that blocks the import.** See Change 1.
-4. ~~Single-moment (`base`) path and `GateFactor`~~ — **resolved:** the `Dual moment`/`Single moment` systems were removed long ago. Measured data (the target) is read by `MeasuredTEMXYZSystem`, which applies `GateFactor` for 1…N moments; `SyntheticTEMXYZSystem` has no GEX and behaves as `GateFactor = 1`. So the `GateFactor = 1` import reconciliation is always valid, and the noise step defaults `GateFactor`/`scalefactor` to `1.0` when no GEX is present. See Changes 1 and 3.
+4. ~~Single-moment (`base`) path and `GateFactor`~~ — **resolved:** the `Dual moment`/`Single moment` systems were removed long ago. Measured data (the target) is read by `MeasuredTEMXYZSystem`, which applies `GateFactor` for 1…N moments; `SyntheticTEMXYZSystem` has no GEX and behaves as `GateFactor = 1`. So the calibration applies to every measured import, and the noise step defaults `GateFactor`/`scalefactor` to `1.0` when no GEX is present. See Changes 1 and 3.
 5. ~~**Units of a user-supplied `noise_level_1ms`**~~ — **decided: Option A, physical units (V/Am²), identical to SimPEG.** The noise step reads `scalefactor` + `GateFactor` and applies them to the transient physical form. See Change 3.
