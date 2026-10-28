@@ -13,11 +13,14 @@ opens with the library's bundled pipeline filled in.
 """
 
 import contextlib
+import functools
+import inspect
 import json
 import logging
 import os
 import sys
 import tempfile
+import typing
 
 import fsspec
 import swaggerspect
@@ -167,6 +170,93 @@ def _summarize(report, dataset):
     return {"worst_verdict": flight, "instrument": instrument, "ungraded": ungraded}
 
 
+def data_parameters(step):
+    """The parameters of a step that read data from where a string points.
+
+    The library types its external inputs: a parameter that takes a loaded
+    object as well as a string (``str | XYZ``, ``str | GeoDataFrame``, ``str |
+    rasterio.DatasetReader``) reads data, and a string given to it says where
+    from. Every other string is a value — an output path, a column name, a
+    method — so ``str | dict`` does not count (``dict`` is built in, not data),
+    nor does ``str | Path``.
+
+    Parameters
+    ----------
+    step : callable
+        A registered step function.
+
+    Returns
+    -------
+    list of str
+        The names of its data parameters, in signature order.
+    """
+    names = []
+    for name, parameter in inspect.signature(step, eval_str=True).parameters.items():
+        members = typing.get_args(parameter.annotation) or (parameter.annotation,)
+        loaded = [m for m in members if isinstance(m, type) and m.__module__ != "builtins"
+                  and not issubclass(m, os.PathLike)]
+        if str in members and loaded:
+            names.append(name)
+    return names
+
+
+def _reading_local_copies(step, parameters, local):
+    """``step``, called with the local copy wherever one of ``parameters`` names a fetched URL."""
+    @functools.wraps(step)
+    def run_step(dataset, **params):
+        params = {key: local.get(value, value) if key in parameters and isinstance(value, str) else value
+                  for key, value in params.items()}
+        return step(dataset, **params)
+    return run_step
+
+
+def fetch_step_inputs(pipeline, registered, storage_kwargs, held):
+    """The registry to run with, its steps reading local copies of the data they name.
+
+    The library opens only local paths, so a URL given to a data parameter
+    (:func:`data_parameters`) is downloaded here, before the run starts, and the
+    copy is kept until ``held`` closes. Only the step's call sees the copy: the
+    pipeline keeps the URL, and the runner records the pipeline's parameters, so
+    the report and the dataset's processing history name where the data came
+    from, not a temporary file. Any other parameter is passed as given, so an
+    output location in storage is never read as an input.
+
+    Parameters
+    ----------
+    pipeline : ymerflow_processing.pipeline.Pipeline
+        The pipeline to run, already validated against ``registered``.
+    registered : dict
+        Step name to step function, from the library's registry.
+    storage_kwargs : dict
+        fsspec options for the project's storage.
+    held : contextlib.ExitStack
+        Holds the downloaded copies; closing it deletes them.
+
+    Returns
+    -------
+    dict
+        ``registered`` itself when no step is given a URL as data, otherwise a
+        copy in which those steps read the local copies.
+    """
+    wanted, urls = {}, set()
+    for name, params in pipeline.steps:
+        parameters = data_parameters(registered[name])
+        given = {value for key, value in params.items()
+                 if key in parameters and isinstance(value, str) and "://" in value}
+        if given:
+            wanted[name] = parameters
+            urls |= given
+    if not urls:
+        return registered
+
+    print(f"Fetching step inputs: {', '.join(sorted(urls))}")
+    local = held.enter_context(localize_urls({url: url for url in urls}, storage_kwargs))
+    steps = dict(registered)
+    for name, parameters in wanted.items():
+        steps[name] = _reading_local_copies(registered[name], parameters, local)
+    return steps
+
+
 #: What a saved edit is a difference from: this process's output before it.
 EDIT_CHECKPOINT = "output of the steps above"
 
@@ -274,9 +364,11 @@ class _PipelineProcess:
         # in a processing pipeline fails at once and says which registry it is in.
         pipeline = yfp.Pipeline({"kind": cls.kind, "steps": steps})
         _, registered = yfp.resolve_group(pipeline, ["filters", "qc"])
-        runner = getattr(yfp, cls.runner)(pipeline, registered)
+        pipeline.validate(registered)
 
-        with _library_log_to_stdout():
+        with contextlib.ExitStack() as held, _library_log_to_stdout():
+            runner = getattr(yfp, cls.runner)(
+                pipeline, fetch_step_inputs(pipeline, registered, storage_kwargs, held))
             with _local_files(input_data, storage_kwargs) as (xyz_path, gex_path, dataset_name):
                 dataset = load(xyz_path, gex_path)
             report = yfp.RunReport(pipeline=pipeline.document,

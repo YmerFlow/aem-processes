@@ -5,6 +5,7 @@ A synthetic delivery is imported the way the platform imports one
 input is exactly what a real platform dataset looks like.
 """
 
+import contextlib
 import json
 import os
 import subprocess
@@ -388,3 +389,76 @@ def test_qc_refuses_edits_rather_than_dropping_them(tmp_path):
                     input_data=f"file://{tmp_path}/nowhere/root.msgpack",
                     steps=[{"height_above_ground": {"good_max": 45, "marginal_max": 65}}],
                     diff=f"file://{tmp_path}/nowhere/diff.msgpack")
+
+
+# ── Step inputs in storage ───────────────────────────────────────────────────
+
+def test_a_step_reads_its_input_from_storage(imported, tmp_path):
+    """compute_misfit pointed at a synthetic in storage, in a fresh interpreter.
+    memory:// stands in for the project's object store; the library opens only
+    local paths, so the process type has to fetch it."""
+    synthetic = f"{dataset_dir(imported)}/root.xyz"   # the data as its own synthetic
+    script = ("import json, sys, fsspec\n"
+              "from aem_processes.yf_processing_process import YFProcessTEM\n"
+              "context, imported, synthetic = json.loads(sys.argv[1])\n"
+              "with open(synthetic, 'rb') as src, fsspec.open('memory://inversion/root.xyz', 'wb') as dst:\n"
+              "    dst.write(src.read())\n"
+              "result = YFProcessTEM.run(storage_context=context, input_data=imported, steps=[\n"
+              "    {'compute_misfit': {'result': 'memory://inversion/root.xyz'}}])\n"
+              "print(json.dumps(result))\n")
+    arguments = json.dumps([storage(tmp_path, "process"), imported, synthetic])
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(p for p in sys.path if p))
+    done = subprocess.run([sys.executable, "-c", script, arguments],
+                          env=env, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr[-2000:]
+
+    output = json.loads(done.stdout.strip().splitlines()[-1])["outputs"]["processed_data"]
+    misfit = XYZ(f"{dataset_dir(output)}/root.xyz").flightlines["resdata"]
+    np.testing.assert_allclose(misfit, 0.0)   # measured against itself
+
+
+def test_the_report_names_the_storage_url_not_the_copy(imported, tmp_path):
+    """apply_manual_edits as a step, its diff in storage: applied, and recorded
+    by its URL in the report and the processing history."""
+    import fsspec
+
+    local = write_editor_diff(tmp_path / "edits.msgpack", {(2, 3): 0}).split("file://", 1)[1]
+    url = f"memory://{tmp_path.name}/edits.msgpack"
+    with open(local, "rb") as src, fsspec.open(url, "wb") as dst:
+        dst.write(src.read())
+    result = YFProcessTEM.run(storage_context=storage(tmp_path, "process"), input_data=imported,
+                              steps=[{"apply_manual_edits": {"diff": url}}])
+    output_url = result["outputs"]["processed_data"]
+
+    output, in_use = in_use_of(output_url)
+    assert in_use[2, 3] == 0
+    assert report(output_url)["steps"][-1]["params"]["diff"] == url
+    history = json.loads(output.model_info["processing_history"])
+    assert history[-1]["params"]["diff"] == url
+
+
+def test_only_parameters_that_read_data_are_fetched():
+    """A parameter that also takes a loaded object (an XYZ, a raster, vector
+    geometry) reads data; a plain string is a value, and an output path is one."""
+    from aem_processes.yf_processing_process import data_parameters
+    from ymerflow_processing.pipeline import load_steps
+
+    registered = load_steps("ymerflow.processing.filters")
+    assert data_parameters(registered["compute_misfit"]) == ["result"]
+    assert data_parameters(registered["apply_manual_edits"]) == ["diff"]
+    assert data_parameters(registered["apply_terrain_model"]) == ["terrain"]
+    assert data_parameters(registered["cull_near_infrastructure"]) == ["infrastructure"]
+    assert data_parameters(registered["export_vector"]) == []          # path: where to write
+    assert data_parameters(registered["apply_nominal_current"]) == []  # str | dict: column names
+
+
+def test_an_output_path_in_storage_is_left_alone():
+    """export_vector's path is where to write, so nothing is fetched for it."""
+    from aem_processes.yf_processing_process import fetch_step_inputs
+    from ymerflow_processing.pipeline import Pipeline, load_steps
+
+    registered = load_steps("ymerflow.processing.filters")
+    pipeline = Pipeline({"kind": "filters", "steps": [
+        {"export_vector": {"path": "s3://nowhere/out.gpkg", "crs": "EPSG:32613"}}]})
+    with contextlib.ExitStack() as held:
+        assert fetch_step_inputs(pipeline, registered, {}, held) is registered
