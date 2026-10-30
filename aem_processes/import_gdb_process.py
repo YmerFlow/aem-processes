@@ -90,7 +90,7 @@ class GeosoftGDBImporter:
                     "type": "string",
                     "title": "Lines (Optional)",
                     "description": "Comma-separated list of line names to import (e.g. "
-                                   "'L1010,L1020'). Leave empty to import all lines.",
+                                   "'L100,L200'). Leave empty to import all lines.",
                     "default": ""
                 },
                 "scalefactor": {
