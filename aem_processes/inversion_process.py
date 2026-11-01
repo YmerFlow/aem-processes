@@ -113,10 +113,16 @@ class Inversion:
         outputs = {}
         iteration_datasets = []
 
-        # Localize input data URL
+        # Localize the input data, and the earlier models a warm start reads
+        # (startmodel__dataset): simpeg opens only local paths. The copies live
+        # until the run is done.
         print(f"Loading input data from: {input_data_url}")
-        with localize_urls({'input': input_data_url}, storage_kwargs) as localized:
+        inputs = {'input': input_data_url,
+                  'startmodel__dataset': system_args.get('startmodel__dataset')}
+        with localize_urls(inputs, storage_kwargs) as localized:
             input_path = localized['input']
+            if localized['startmodel__dataset'] is not None:
+                system_args['startmodel__dataset'] = localized['startmodel__dataset']
 
             xyz, gex = libaarhusxyz.export.msgpack.load(input_path, True)
             xyz.normalize(naming_standard="libaarhusxyz")
