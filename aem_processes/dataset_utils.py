@@ -5,7 +5,18 @@ import json
 import io
 import fsspec
 import slugify
+from libaarhusxyz.normalizer import default_name_mapper
 from .stats import compute_xyz_stats, STATS_MIME
+
+# The layer tables that place layers in depth, in libaarhusxyz names. A
+# resistivity model has them; AEM data has layer tables (gates, STDs, InUse
+# flags) but none of these, so it cannot be exported in 3D.
+LAYER_DEPTHS = {"dep_top", "dep_bot", "height"}
+
+
+def _has_layer_depths(xyz):
+    """Whether xyz is a resistivity model, with layer depths [m] to export in 3D."""
+    return any(default_name_mapper(key) in LAYER_DEPTHS for key in xyz.layer_data)
 
 
 def write_dataset(xyz, gex, dataset_name, process_id, process_version, storage_base, storage_kwargs,
@@ -92,8 +103,9 @@ def write_dataset(xyz, gex, dataset_name, process_id, process_version, storage_b
             f.write(text)
         files[mime_type] = extra_url
 
-    # Write VTK and GLB if model has layer_data (resistivity models only)
-    if hasattr(xyz, 'layer_data') and xyz.layer_data:
+    # Write VTK and GLB for resistivity models only; data has no layer depths
+    export_3d = _has_layer_depths(xyz)
+    if export_3d:
         try:
             # Write root VTK
             root_vtk_url = f"{dataset_prefix}/root.vtk"
@@ -168,8 +180,8 @@ def write_dataset(xyz, gex, dataset_name, process_id, process_version, storage_b
                 STATS_MIME: part_stats_url,
             }
 
-            # Write VTK and GLB for parts if available
-            if hasattr(line_xyz, 'layer_data') and line_xyz.layer_data:
+            # Write VTK and GLB for parts of a resistivity model
+            if export_3d:
                 try:
                     # Write part VTK
                     part_vtk_url = f"{dataset_prefix}/parts/{fline_str}.vtk"
