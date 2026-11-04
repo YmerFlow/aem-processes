@@ -3,7 +3,9 @@
 simpeg opens only local paths. ``input_data`` was always downloaded first; the
 earlier models a warm start reads (``startmodel__dataset``, in simpeg's plan
 "Warm start for the spatially constrained inversion") are inputs too, given in
-the system's form as a list of dataset URLs.
+the system's form as a list of dataset URLs. Every URL in the parameters is
+localized, as the processing process does, so any other dataset a system
+argument names is fetched the same way.
 
 No inversion is run: a stand-in system, served under an entry point name the way
 simpeg's systems are, records what it is given. The form schema, its validation
@@ -36,6 +38,9 @@ class StandIn:
     startmodel__dataset: typing.Annotated[list, {"json_schema": {"items": {
         "type": "string", "format": "uri", "x-format": "dataset"}}}] = None
     "Earlier inversion models to start from."
+    reference: typing.Annotated[str, {"json_schema": {
+        "format": "uri", "x-format": "dataset"}}] = None
+    "A model to compare against, standing in for any other dataset argument."
 
     def __init__(self, xyz):
         self.xyz = xyz
@@ -53,6 +58,8 @@ class StandIn:
         SEEN["exists"] = [os.path.exists(path) for path in self.startmodel__dataset or []]
         SEEN["final_beta"] = [xyz_msgpack.load(path).model_info["final_beta"]
                               for path in self.startmodel__dataset or []]
+        SEEN["reference"] = self.reference
+        SEEN["reference_exists"] = self.reference is not None and os.path.exists(self.reference)
 
 
 @pytest.fixture(autouse=True)
@@ -89,12 +96,12 @@ def put_model(url, final_beta=None):
     return url
 
 
-def run(tmp_path, startmodel):
+def run(tmp_path, startmodel, **args):
     context = {"process_id": "process", "project_id": "test", "version": "0",
                "storage_base": f"file://{tmp_path}/store", "storage_kwargs": {}}
     data = put_model(f"memory://{tmp_path.name}/data/root.msgpack")
     return Inversion.run(storage_context=context, input_data=data,
-                         system={"Stand-in": {"startmodel": startmodel}})
+                         system={"Stand-in": {"startmodel": startmodel, **args}})
 
 
 def test_start_models_in_storage_reach_the_system_as_local_files(tmp_path):
@@ -112,6 +119,14 @@ def test_start_models_in_storage_reach_the_system_as_local_files(tmp_path):
 def test_a_job_without_start_models_is_unchanged(tmp_path):
     run(tmp_path, {"res": 40})
     assert SEEN["dataset"] is None and SEEN["res"] == 40
+
+
+def test_any_dataset_a_system_argument_names_is_fetched(tmp_path):
+    """No argument is picked out by name: every URL in the system form is localized."""
+    reference = put_model(f"memory://{tmp_path.name}/reference/root.msgpack")
+    run(tmp_path, {"res": 40}, reference=reference)
+    assert "://" not in SEEN["reference"] and SEEN["reference_exists"]
+    assert not os.path.exists(SEEN["reference"])
 
 
 def test_the_form_offers_start_models_as_datasets():
