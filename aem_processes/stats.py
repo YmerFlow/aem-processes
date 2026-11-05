@@ -77,6 +77,24 @@ def _collapse_if_uniform(arr):
     return arr
 
 
+def compute_channel_stats(df):
+    """Full {all, layers} statistics block for one layer_data channel.
+
+    `all` is compute_column_stats over every value; `layers` is the per-layer
+    breakdown (one list per stat, collapsed to a scalar when uniform). This is
+    the non-constant branch of compute_xyz_stats, exposed so callers that want
+    a channel's real stats even when it happens to be uniform (e.g. a model
+    comparison's Δ) can bypass the constant-geometry compaction.
+    """
+    per_layer = [compute_column_stats(df[col].values) for col in df.columns]
+    stat_keys = list(per_layer[0].keys()) if per_layer else []
+    layers = {k: [s.get(k) for s in per_layer] for k in stat_keys}
+    return {
+        "all": compute_column_stats(df.values.ravel()),
+        "layers": {k: _collapse_if_uniform(v) for k, v in layers.items()},
+    }
+
+
 def compute_xyz_stats(xyz):
     """Compute statistics for an XYZ/AEM dataset."""
     fl = xyz.flightlines
@@ -131,13 +149,7 @@ def compute_xyz_stats(xyz):
                     "values": [_round(float(v)) for v in df.iloc[0].values],
                 }
             else:
-                per_layer = [compute_column_stats(df[col].values) for col in df.columns]
-                stat_keys = list(per_layer[0].keys()) if per_layer else []
-                layers = {k: [s.get(k) for s in per_layer] for k in stat_keys}
-                layer_data_stats[channel] = {
-                    "all": compute_column_stats(df.values.ravel()),
-                    "layers": {k: _collapse_if_uniform(v) for k, v in layers.items()},
-                }
+                layer_data_stats[channel] = compute_channel_stats(df)
         except Exception:
             pass
     stats["layer_data"] = layer_data_stats
