@@ -94,10 +94,8 @@ class Inversion:
         # Get save_iterations flag (now a top-level parameter)
         save_iterations = kwargs.get('save_iterations', False)
 
-        # Transform system_config from swaggerspect format to load_system format
-        # swaggerspect produces: {"system_name": {"param1": val1, ...}}
-        # load_system expects: {"name": "system_name", "args": {"param1": val1, ...}}
-
+        # Validate the system form before anything is downloaded; this also
+        # flattens its groups (startmodel.dataset -> startmodel__dataset)
         system_config = copy.deepcopy(system_config)
         swaggerspect.validate.GroupMergingValidator(
             cls.system_schema()
@@ -105,18 +103,25 @@ class Inversion:
             system_config
         )
 
-        
-        system_name, system_args = next(iter(system_config.items()))
-        system_config = {"name": system_name, "args": system_args}
-
         # Track outputs
         outputs = {}
         iteration_datasets = []
 
-        # Localize input data URL
+        # Localize every URL in the parameters, as the processing process does:
+        # the input data and any dataset a system argument names, such as the
+        # earlier models a warm start reads. simpeg opens only local paths.
+        # The system config is the validated one; only values are localized,
+        # so a system named by the URL of its YAML keeps that name. The copies
+        # live until the run is done.
         print(f"Loading input data from: {input_data_url}")
-        with localize_urls({'input': input_data_url}, storage_kwargs) as localized:
-            input_path = localized['input']
+        with localize_urls(dict(kwargs, system=system_config), storage_kwargs) as localized:
+            input_path = localized['input_data']
+
+            # Transform system_config from swaggerspect format to load_system format
+            # swaggerspect produces: {"system_name": {"param1": val1, ...}}
+            # load_system expects: {"name": "system_name", "args": {"param1": val1, ...}}
+            system_name, system_args = next(iter(localized['system'].items()))
+            system_config = {"name": system_name, "args": system_args}
 
             xyz, gex = libaarhusxyz.export.msgpack.load(input_path, True)
             xyz.normalize(naming_standard="libaarhusxyz")
