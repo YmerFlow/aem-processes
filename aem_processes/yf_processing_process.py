@@ -300,6 +300,7 @@ class _PipelineProcess:
                 "type": "string",
                 "format": "uri",
                 "x-format": "dataset",
+                "x-target-mediatypes": ["application/x-aarhusxyz-msgpack"],
                 "title": "Input Dataset",
                 "description": "An imported or previously processed AEM dataset",
             },

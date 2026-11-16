@@ -48,6 +48,15 @@ class DatasetWriter:
         self.prefix = (
             f"{storage_base}/processes/{process_id}/{process_version}"
             f"/datasets/{self.dataset_id}")
+        # An inverted resistivity model carries the canonical ALC marker
+        # layer_data["resistivity"]; raw/processed data and synthetic responses
+        # never do. Split the msgpack media type accordingly so dataset pickers
+        # can tell a model from data (both share the top-level mime and the
+        # files-map key, as Dataset.url requires).
+        self.msgpack_mime = (
+            "application/x-aarhusxyz-model-msgpack"
+            if "resistivity" in (getattr(xyz, "layer_data", None) or {})
+            else "application/x-aarhusxyz-msgpack")
 
     # ── orchestration ──────────────────────────────────────────────────────
     def write(self):
@@ -148,7 +157,7 @@ class DatasetWriter:
         self.write_gex(f"{p}/root.gex")
 
         files = {
-            "application/x-aarhusxyz-msgpack": f"{p}/root.msgpack",
+            self.msgpack_mime: f"{p}/root.msgpack",
             "application/geo+json": f"{p}/root.geojson",
             "text/x-aarhusxyz": f"{p}/root.xyz",
             "text/x-aarhusxyz-gex": f"{p}/root.gex",
@@ -190,7 +199,7 @@ class DatasetWriter:
         self.write_xyz(line_xyz, f"{d}/{fline_str}.xyz")
 
         files = {
-            "application/x-aarhusxyz-msgpack": f"{d}/{fline_str}.msgpack",
+            self.msgpack_mime: f"{d}/{fline_str}.msgpack",
             "application/geo+json": f"{d}/{fline_str}.geojson",
             "text/x-aarhusxyz": f"{d}/{fline_str}.xyz",
         }
@@ -209,7 +218,7 @@ class DatasetWriter:
     def write_info(self, files, parts):
         info = {
             "id": self.dataset_id,
-            "mime_type": "application/x-aarhusxyz-msgpack",
+            "mime_type": self.msgpack_mime,
             "dataset_name": self.dataset_name,
             "files": files,
             "parts": parts,

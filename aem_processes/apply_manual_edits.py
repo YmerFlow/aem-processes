@@ -62,6 +62,7 @@ class ApplyManualEdits:
                     "type": "string",
                     "format": "uri",
                     "x-format": "dataset",
+                    "x-target-mediatypes": ["application/x-aarhusxyz-msgpack"],
                     "title": "Input Dataset",
                     "description": "Input XYZ dataset to filter",
                 },

@@ -220,6 +220,7 @@ class CompareModels:
                     "type": "string",
                     "format": "uri",
                     "x-format": "dataset",
+                    "x-target-mediatypes": [["application/x-aarhusxyz-model-msgpack"], ["application/x-aarhusxyz-msgpack"]],
                     "title": "Model A (reference)",
                     "description": (
                         "Reference resistivity model. Its layer geometry defines the "
@@ -230,6 +231,7 @@ class CompareModels:
                     "type": "string",
                     "format": "uri",
                     "x-format": "dataset",
+                    "x-target-mediatypes": [["application/x-aarhusxyz-model-msgpack"], ["application/x-aarhusxyz-msgpack"]],
                     "title": "Model B",
                     "description": "Resistivity model to compare against model A.",
                 },

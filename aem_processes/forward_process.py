@@ -45,6 +45,7 @@ class Forward:
                     "type": "string",
                     "format": "uri",
                     "x-format": "dataset",
+                    "x-target-mediatypes": [["application/x-aarhusxyz-model-msgpack"], ["application/x-aarhusxyz-msgpack"]],
                     "title": "Input Resistivity Model",
                     "description": "Resistivity model dataset to forward model (from inversion or model simulator)"
                 },
