@@ -48,14 +48,19 @@ class DatasetWriter:
         self.prefix = (
             f"{storage_base}/processes/{process_id}/{process_version}"
             f"/datasets/{self.dataset_id}")
-        # An inverted resistivity model carries the canonical ALC marker
-        # layer_data["resistivity"]; raw/processed data and synthetic responses
-        # never do. Split the msgpack media type accordingly so dataset pickers
-        # can tell a model from data (both share the top-level mime and the
-        # files-map key, as Dataset.url requires).
+        # An inverted resistivity model carries a resistivity layer in layer_data;
+        # raw/processed data and synthetic responses carry gate channels (Gate_*,
+        # STD_*, …) there instead, never a resistivity layer. The runner's
+        # libaarhusxyz keys that layer "rho" under the ALC standard (verified
+        # against the actual load+normalize path); older/divergent clones use
+        # "resistivity" — accept either so the split is robust across versions.
+        # Split the msgpack media type accordingly so dataset pickers can tell a
+        # model from data (both share the top-level mime and the files-map key,
+        # as Dataset.url requires).
+        _layers = getattr(xyz, "layer_data", None) or {}
         self.msgpack_mime = (
             "application/x-aarhusxyz-model-msgpack"
-            if "resistivity" in (getattr(xyz, "layer_data", None) or {})
+            if any(k in _layers for k in ("rho", "resistivity"))
             else "application/x-aarhusxyz-msgpack")
 
     # ── orchestration ──────────────────────────────────────────────────────
