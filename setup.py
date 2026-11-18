@@ -11,7 +11,7 @@ setup(
         "fsspec",
         "s3fs",
         "gcsfs",
-        "libaarhusxyz[normalisation,3d] @ git+https://github.com/YmerFlow/libaarhusxyz.git@data-model-mime-split", #"libaarhusxyz[normalisation,3d]>=0.0.41",
+        "libaarhusxyz[normalisation,3d] @ git+https://github.com/YmerFlow/libaarhusxyz.git", #"libaarhusxyz[normalisation,3d]>=0.0.41",
         "numpy",
         "pandas",
         "msgpack",
