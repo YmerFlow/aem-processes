@@ -45,7 +45,7 @@ class Processing:
                     "type": "string",
                     "format": "uri",
                     "x-format": "dataset",
-                    "x-target-mediatypes": ["application/x-aarhusxyz-msgpack"],
+                    "x-target-mediatypes": [["application/x-aarhusxyz-data-msgpack"], ["application/x-aarhusxyz-msgpack"]],
                     "title": "Input Dataset",
                     "description": "Dataset from import or previous processing"
                 },

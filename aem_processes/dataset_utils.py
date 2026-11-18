@@ -48,20 +48,20 @@ class DatasetWriter:
         self.prefix = (
             f"{storage_base}/processes/{process_id}/{process_version}"
             f"/datasets/{self.dataset_id}")
-        # An inverted resistivity model carries a resistivity layer in layer_data;
-        # raw/processed data and synthetic responses carry gate channels (Gate_*,
-        # STD_*, …) there instead, never a resistivity layer. The runner's
-        # libaarhusxyz keys that layer "rho" under the ALC standard (verified
-        # against the actual load+normalize path); older/divergent clones use
-        # "resistivity" — accept either so the split is robust across versions.
-        # Split the msgpack media type accordingly so dataset pickers can tell a
-        # model from data (both share the top-level mime and the files-map key,
-        # as Dataset.url requires).
+        # Three-way msgpack media type, decided solely by the presence of a
+        # resistivity layer keyed "rho" (the runner's libaarhusxyz ALC key):
+        #   - has "rho"  → resistivity-model mime (…-model-msgpack)
+        #   - no "rho"   → data mime (…-data-msgpack)
+        # The importer NEVER produces the legacy generic "…-msgpack" any more —
+        # that mime now denotes only pre-split "mixed" datasets, which plot layer
+        # types still accept for backward compatibility. The media type is both
+        # the top-level mime and the files-map key (they move together, as
+        # Dataset.url requires).
         _layers = getattr(xyz, "layer_data", None) or {}
         self.msgpack_mime = (
             "application/x-aarhusxyz-model-msgpack"
-            if any(k in _layers for k in ("rho", "resistivity"))
-            else "application/x-aarhusxyz-msgpack")
+            if "rho" in _layers
+            else "application/x-aarhusxyz-data-msgpack")
 
     # ── orchestration ──────────────────────────────────────────────────────
     def write(self):
