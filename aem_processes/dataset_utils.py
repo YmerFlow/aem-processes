@@ -15,7 +15,18 @@ import json
 import io
 import fsspec
 import slugify
+from libaarhusxyz.normalizer import default_name_mapper
 from .stats import compute_xyz_stats, STATS_MIME
+
+# The layer tables that place layers in depth, in libaarhusxyz names. A
+# resistivity model has them; AEM data has layer tables (gates, STDs, InUse
+# flags) but none of these, so it cannot be exported in 3D.
+LAYER_DEPTHS = {"dep_top", "dep_bot", "height"}
+
+
+def _has_layer_depths(xyz):
+    """Whether xyz is a resistivity model, with layer depths [m] to export in 3D."""
+    return any(default_name_mapper(key) in LAYER_DEPTHS for key in xyz.layer_data)
 
 
 class DatasetWriter:
@@ -130,10 +141,11 @@ class DatasetWriter:
         return files
 
     def write_vtk_glb(self, xyz, vtk_url, glb_url, label=""):
-        """Write VTK + GLB for a resistivity model (has layer_data). 3D export
-        is best-effort: a failure logs a warning and leaves the rest intact."""
+        """Write VTK + GLB for a resistivity model (has layer depths); data has
+        none, so it gets no 3D forms. 3D export is best-effort: a failure logs a
+        warning and leaves the rest intact."""
         files = {}
-        if not (hasattr(xyz, "layer_data") and xyz.layer_data):
+        if not _has_layer_depths(xyz):
             return files
         try:
             print(f"Writing VTK to: {vtk_url}")
