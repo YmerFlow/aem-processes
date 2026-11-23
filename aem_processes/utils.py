@@ -60,12 +60,13 @@ def get_entry_points(group):
         group: Entry point group name
 
     Returns:
-        Dict mapping entry point names to EntryPoint objects
+        Dict mapping entry point names to EntryPoint objects, empty for a
+        group nothing registers
     """
-    try:
-        return {entry.name: entry for entry in importlib.metadata.entry_points()[group]}
-    except KeyError:
-        return {}
+    # entry_points(group=...) works from Python 3.10. The dict API,
+    # entry_points()[group], looks up an entry point name on 3.12 and finds
+    # no group at all.
+    return {entry.name: entry for entry in importlib.metadata.entry_points(group=group)}
 
 
 def _decompress_if_needed(local_path, original_url, temp_files):
