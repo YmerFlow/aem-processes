@@ -296,41 +296,139 @@ def in_use_of(url, key="InUse_Ch01"):
     return output, output.layer_data[key].values
 
 
-def test_saved_edits_are_replayed_after_every_step(imported, tmp_path):
-    """Saving edits re-runs the process with "diff" set; the edit must survive it.
-    A single URL, as a version saved before edits accumulated carries."""
-    diff = write_editor_diff(tmp_path / "inuse_diff_processed_data.msgpack", {(2, 3): 0})
+def part_msgpack(url, fline):
+    """The data-msgpack URL of one flight-line part of a dataset."""
+    files = info(url)["parts"][fline]["files"]
+    return files["application/x-aarhusxyz-data-msgpack"]
+
+
+SAVE_POINT = "save_intermediate_and_apply_diff"
+
+
+def test_two_save_points_each_write_a_dataset_with_parts(imported, tmp_path):
+    """Each save point is a dataset under its own name, with root and parts,
+    returned in outputs before the final processed_data."""
     result = YFProcessTEM.run(storage_context=storage(tmp_path, "process"), input_data=imported,
-                              steps=[{"cull_negatives": {}}], diff=diff)
+                              steps=[{"cull_negatives": {}},
+                                     {SAVE_POINT: {"name": "first"}},
+                                     {SAVE_POINT: {"name": "second"}}])
+    outputs = result["outputs"]
+    assert list(outputs) == ["first", "second", "processed_data"]
+    for name, url in outputs.items():
+        described = info(url)
+        assert described["dataset_name"] == name
+        assert {"text/x-aarhusxyz", "application/geo+json"} <= set(described["files"])
+        assert len(described["parts"]) == 2  # the two flight lines
+
+
+def test_each_save_point_holds_the_state_before_its_own_edit(imported, tmp_path):
+    """The snapshot goes out before the edit touches the mask: with a diff on
+    the first save point, its dataset keeps the pre-edit mask, while the second
+    save point and processed_data show the edit."""
+    diff = write_editor_diff(tmp_path / "first_diff.msgpack", {(2, 3): 0})
+    result = YFProcessTEM.run(storage_context=storage(tmp_path, "process"), input_data=imported,
+                              steps=[{"cull_negatives": {}},
+                                     {SAVE_POINT: {"name": "first", "diff": diff}},
+                                     {SAVE_POINT: {"name": "second"}}])
+    outputs = result["outputs"]
+    assert set(outputs) == {"first", "second", "processed_data"}
+    _, first = in_use_of(outputs["first"])
+    _, second = in_use_of(outputs["second"])
+    _, processed = in_use_of(outputs["processed_data"])
+    assert first[2, 3] == 1       # snapshot taken before this point's edit
+    assert first.sum() == first.size
+    assert second[2, 3] == 0      # the edit shows at the next save point
+    assert processed[2, 3] == 0   # and in the final output
+    assert processed.sum() == processed.size - 1
+
+
+def test_the_sink_leaves_the_run_dataset_as_it_was(imported, tmp_path):
+    """The sink must not modify the dataset, which the rest of the run uses: it
+    writes a shallow copy, so no apply_idx column, no renaming and no changed
+    values land on the run's own dataset."""
+    from ymerflow_processing.dataset import load
+    from aem_processes.yf_processing_process import _save_point_sink
+
+    source = dataset_dir(imported)
+    dataset = load(f"{source}/root.xyz", f"{source}/root.gex")
+    xyz = dataset.survey.xyz
+    before_flightlines = list(xyz.flightlines.columns)
+    before_layers = {key: list(frame.columns) for key, frame in xyz.layer_data.items()}
+    before_values = {key: frame.values.copy() for key, frame in xyz.layer_data.items()}
+    before_info = dict(xyz.model_info)
+
+    outputs = {}
+    _save_point_sink(storage(tmp_path, "process"), outputs)("snapshot", dataset)
+
+    assert "snapshot" in outputs
+    assert "apply_idx" not in xyz.flightlines.columns
+    assert list(xyz.flightlines.columns) == before_flightlines
+    assert {key: list(frame.columns) for key, frame in xyz.layer_data.items()} == before_layers
+    assert dict(xyz.model_info) == before_info
+    for key, frame in xyz.layer_data.items():
+        np.testing.assert_array_equal(frame.values, before_values[key])
+
+
+def test_a_diff_from_a_part_round_trips_through_its_apply_idx(imported, tmp_path):
+    """The editor builds its diff from the part it plots, addressing soundings by
+    the part's apply_idx. A diff so built, put on the save point and re-run,
+    turns off exactly those gates in processed_data."""
+    from libaarhusxyz.export import msgpack as xyz_msgpack
+
+    steps = [{"cull_negatives": {}}, {SAVE_POINT: {"name": "sp"}}]
+    first = YFProcessTEM.run(storage_context=storage(tmp_path, "process1"),
+                             input_data=imported, steps=steps)
+    part_url = part_msgpack(first["outputs"]["sp"], "100201")  # the second line
+    part, _ = xyz_msgpack.load(part_url.split("file://", 1)[1], return_gex=True)
+    apply_idx = int(part.flightlines["apply_idx"].iloc[0])
+    assert apply_idx == PER_LINE  # the second line starts at row PER_LINE
+
+    diff = write_editor_diff(tmp_path / "part_diff.msgpack", {(apply_idx, 4): 0})
+    steps[1][SAVE_POINT]["diff"] = diff
+    second = YFProcessTEM.run(storage_context=storage(tmp_path, "process2"),
+                              input_data=imported, steps=steps)
+    _, processed = in_use_of(second["outputs"]["processed_data"])
+    assert processed[apply_idx, 4] == 0
+    assert processed.sum() == processed.size - 1
+
+
+def test_a_save_point_diff_in_storage_is_fetched_and_recorded_by_url(imported, tmp_path):
+    """A save point's diff in storage is fetched like any other step input, and
+    the report and processing history name the URL, not the local copy."""
+    import fsspec
+
+    local = write_editor_diff(tmp_path / "sp_edits.msgpack", {(2, 3): 0}).split("file://", 1)[1]
+    url = f"memory://{tmp_path.name}/sp_edits.msgpack"
+    with open(local, "rb") as src, fsspec.open(url, "wb") as dst:
+        dst.write(src.read())
+
+    result = YFProcessTEM.run(storage_context=storage(tmp_path, "process"), input_data=imported,
+                              steps=[{"cull_negatives": {}},
+                                     {SAVE_POINT: {"name": "sp", "diff": url}}])
     output_url = result["outputs"]["processed_data"]
 
     output, in_use = in_use_of(output_url)
     assert in_use[2, 3] == 0
-    assert in_use.sum() == in_use.size - 1  # that gate and nothing else
-
-    last = report(output_url)["steps"][-1]
-    assert last["step"] == "apply_manual_edits"
-    assert last["params"]["diff"] == diff  # the edits' URL, not a temporary file
+    saved = [s for s in report(output_url)["steps"] if s["step"] == SAVE_POINT]
+    assert [s["params"]["diff"] for s in saved] == [url]  # the URL, not a temporary file
     history = json.loads(output.model_info["processing_history"])
-    assert [entry["step"] for entry in history][-2:] == ["cull_negatives", "apply_manual_edits"]
+    assert [e["params"].get("diff") for e in history if e["step"] == SAVE_POINT] == [url]
 
 
-def test_every_round_of_edits_is_replayed_in_order(imported, tmp_path):
-    """One entry per save, oldest first: the second round turns one gate the
-    first disabled back on, and disables another."""
-    first = write_editor_diff(tmp_path / "round1.msgpack", {(2, 3): 0, (2, 5): 0})
-    second = write_editor_diff(tmp_path / "round2.msgpack", {(2, 3): 1, (4, 6): 0})
-    result = YFProcessTEM.run(storage_context=storage(tmp_path, "process"), input_data=imported,
-                              steps=[{"cull_negatives": {}}], diff=[first, second])
-    output_url = result["outputs"]["processed_data"]
+def test_a_runner_without_a_sink_runs_a_plain_pipeline_as_before(imported, tmp_path, monkeypatch):
+    """An environment whose ymerflow-processing predates the sink gets no sink,
+    and a pipeline without save points runs exactly as it did before."""
+    import ymerflow_processing.pipeline as yfp
 
-    output, in_use = in_use_of(output_url)
-    assert in_use[2, 3] == 1 and in_use[2, 5] == 0 and in_use[4, 6] == 0
-    assert in_use.sum() == in_use.size - 2
-    replayed = [s["params"]["diff"] for s in report(output_url)["steps"] if s["step"] == "apply_manual_edits"]
-    assert replayed == [first, second]
-    history = json.loads(output.model_info["processing_history"])
-    assert [entry["params"].get("diff") for entry in history if entry["step"] == "apply_manual_edits"] == [first, second]
+    class OldRunner(yfp.ProcessingRunner):
+        def __init__(self, pipeline, steps=None, inventory=True):  # no sink parameter
+            super().__init__(pipeline, steps, inventory)
+
+    monkeypatch.setattr(yfp, "ProcessingRunner", OldRunner)
+    result = YFProcessTEM.run(storage_context=storage(tmp_path, "process"),
+                              input_data=imported, steps=bundled_steps("synthetic-data"))
+    assert set(result["outputs"]) == {"processed_data"}
+    assert REPORT_MIME in info(result["outputs"]["processed_data"])["files"]
 
 
 def run_apply_manual_edits(imported, tmp_path, key):
@@ -378,17 +476,16 @@ def test_apply_manual_edits_is_named_for_what_it_does():
     assert ApplyManualEdits.schema()["title"] == "Apply Manual Edits"
 
 
-def test_only_processing_offers_edits():
-    assert "diff" in YFProcessTEM.schema()["properties"]
+def test_the_schema_has_no_diff_and_a_process_level_diff_is_refused(tmp_path):
+    """The process-level diff is gone — edits live on save points now. An old
+    version still carrying one fails before anything is fetched, and says so."""
+    assert "diff" not in YFProcessTEM.schema()["properties"]
     assert "diff" not in YFQCTEM.schema()["properties"]
-
-
-def test_qc_refuses_edits_rather_than_dropping_them(tmp_path):
-    with pytest.raises(ValueError, match="no in-use edits"):
-        YFQCTEM.run(storage_context=storage(tmp_path, "qc"),
-                    input_data=f"file://{tmp_path}/nowhere/root.msgpack",
-                    steps=[{"height_above_ground": {"good_max": 45, "marginal_max": 65}}],
-                    diff=f"file://{tmp_path}/nowhere/diff.msgpack")
+    with pytest.raises(ValueError, match="save_intermediate_and_apply_diff"):
+        YFProcessTEM.run(storage_context=storage(tmp_path, "process"),
+                         input_data=f"file://{tmp_path}/nowhere/root.msgpack",
+                         steps=[{"cull_negatives": {}}],
+                         diff=f"file://{tmp_path}/nowhere/diff.msgpack")
 
 
 # ── Step inputs in storage ───────────────────────────────────────────────────
